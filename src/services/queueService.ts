@@ -89,6 +89,7 @@ export async function createNewQueue(businessId: string, name: string, role?: st
     totalServedToday: 0,
     entries: [],
     currentToken: 0,
+    lastAssignedToken: 0,
     waitingCount: 0,
     isHalted: false,
     isAppointmentEnabled: false
@@ -109,10 +110,19 @@ export async function callNext(queueId: string) {
     const currentEntries = data.entries || [];
     const entries = [...currentEntries];
     
+    let lastCalledPatient = null;
     // 1. Find serving customer and remove them
     const servingIndex = entries.findIndex((e: any) => e.status === 'serving');
     if (servingIndex !== -1) {
       const removedPatient = entries[servingIndex];
+      lastCalledPatient = {
+        id: removedPatient.id,
+        customerName: removedPatient.customerName,
+        tokenNumber: removedPatient.tokenNumber || 0,
+        phoneNumber: removedPatient.phoneNumber || '',
+        calledAt: new Date().toISOString(),
+        status: 'served'
+      };
       if (removedPatient.appointmentId) {
         try {
           const apptRef = doc(db, 'appointments', removedPatient.appointmentId);
@@ -124,10 +134,18 @@ export async function callNext(queueId: string) {
       entries.splice(servingIndex, 1);
     }
 
+    let newCurrentToken = data.currentToken || 0;
     // 2. Find next customer and make them serving
     const nextIndex = entries.findIndex((e: any) => e.status === 'next');
     if (nextIndex !== -1) {
       entries[nextIndex].status = 'serving';
+      newCurrentToken = entries[nextIndex].tokenNumber || newCurrentToken;
+    } else {
+      const firstWaitIndex = entries.findIndex((e: any) => e.status === 'waiting');
+      if (firstWaitIndex !== -1) {
+        entries[firstWaitIndex].status = 'serving';
+        newCurrentToken = entries[firstWaitIndex].tokenNumber || newCurrentToken;
+      }
     }
 
     // 3. Find first waiting customer and make them next
@@ -139,12 +157,16 @@ export async function callNext(queueId: string) {
     const currentWaiting = data.waitingCount || 0;
     const nextWaiting = Math.max(0, currentWaiting - 1);
 
-    await updateDoc(queueDocRef, {
-      currentToken: increment(1),
+    const updatePayload: Record<string, any> = {
+      currentToken: newCurrentToken,
       waitingCount: nextWaiting,
       totalServedToday: increment(1),
       entries: entries
-    });
+    };
+    if (lastCalledPatient) {
+      updatePayload.lastCalledPatient = lastCalledPatient;
+    }
+    await updateDoc(queueDocRef, updatePayload);
   }
 }
 
@@ -160,10 +182,19 @@ export async function callNextPatient(queueId: string) {
     const nextPatient = entries.find((e: any) => e.status === 'next') || entries.find((e: any) => e.status === 'waiting');
     const calledPatientId = nextPatient ? nextPatient.id : '';
 
+    let lastCalledPatient = null;
     // 1. Find serving customer and remove them
     const servingIndex = entries.findIndex((e: any) => e.status === 'serving');
     if (servingIndex !== -1) {
       const removedPatient = entries[servingIndex];
+      lastCalledPatient = {
+        id: removedPatient.id,
+        customerName: removedPatient.customerName,
+        tokenNumber: removedPatient.tokenNumber || 0,
+        phoneNumber: removedPatient.phoneNumber || '',
+        calledAt: new Date().toISOString(),
+        status: 'served'
+      };
       if (removedPatient.appointmentId) {
         try {
           const apptRef = doc(db, 'appointments', removedPatient.appointmentId);
@@ -175,10 +206,18 @@ export async function callNextPatient(queueId: string) {
       entries.splice(servingIndex, 1);
     }
 
+    let newCurrentToken = data.currentToken || 0;
     // 2. Find next customer and make them serving
     const nextIndex = entries.findIndex((e: any) => e.status === 'next');
     if (nextIndex !== -1) {
       entries[nextIndex].status = 'serving';
+      newCurrentToken = entries[nextIndex].tokenNumber || newCurrentToken;
+    } else {
+      const firstWaitIndex = entries.findIndex((e: any) => e.status === 'waiting');
+      if (firstWaitIndex !== -1) {
+        entries[firstWaitIndex].status = 'serving';
+        newCurrentToken = entries[firstWaitIndex].tokenNumber || newCurrentToken;
+      }
     }
 
     // 3. Find first waiting customer and make them next
@@ -190,12 +229,16 @@ export async function callNextPatient(queueId: string) {
     const currentWaiting = data.waitingCount || 0;
     const nextWaiting = Math.max(0, currentWaiting - 1);
 
-    await updateDoc(queueDocRef, {
-      currentToken: increment(1),
+    const updatePayload: Record<string, any> = {
+      currentToken: newCurrentToken,
       waitingCount: nextWaiting,
       totalServedToday: increment(1),
       entries: entries
-    });
+    };
+    if (lastCalledPatient) {
+      updatePayload.lastCalledPatient = lastCalledPatient;
+    }
+    await updateDoc(queueDocRef, updatePayload);
 
     if (calledPatientId) {
       await logQueueEvent(queueId, 'call', calledPatientId);
@@ -227,10 +270,19 @@ export async function skipPatient(queueId: string) {
     const servingPatient = entries.find((e: any) => e.status === 'serving');
     const skippedPatientId = servingPatient ? servingPatient.id : '';
 
+    let lastCalledPatient = null;
     // 1. Find serving customer and remove them
     const servingIndex = entries.findIndex((e: any) => e.status === 'serving');
     if (servingIndex !== -1) {
       const removedPatient = entries[servingIndex];
+      lastCalledPatient = {
+        id: removedPatient.id,
+        customerName: removedPatient.customerName,
+        tokenNumber: removedPatient.tokenNumber || 0,
+        phoneNumber: removedPatient.phoneNumber || '',
+        calledAt: new Date().toISOString(),
+        status: 'skipped'
+      };
       if (removedPatient.appointmentId) {
         try {
           const apptRef = doc(db, 'appointments', removedPatient.appointmentId);
@@ -242,10 +294,18 @@ export async function skipPatient(queueId: string) {
       entries.splice(servingIndex, 1);
     }
 
+    let newCurrentToken = data.currentToken || 0;
     // 2. Find next customer and make them serving
     const nextIndex = entries.findIndex((e: any) => e.status === 'next');
     if (nextIndex !== -1) {
       entries[nextIndex].status = 'serving';
+      newCurrentToken = entries[nextIndex].tokenNumber || newCurrentToken;
+    } else {
+      const firstWaitIndex = entries.findIndex((e: any) => e.status === 'waiting');
+      if (firstWaitIndex !== -1) {
+        entries[firstWaitIndex].status = 'serving';
+        newCurrentToken = entries[firstWaitIndex].tokenNumber || newCurrentToken;
+      }
     }
 
     // 3. Find first waiting customer and make them next
@@ -257,11 +317,15 @@ export async function skipPatient(queueId: string) {
     const currentWaiting = data.waitingCount || 0;
     const nextWaiting = Math.max(0, currentWaiting - 1);
 
-    await updateDoc(queueDocRef, {
-      currentToken: increment(1),
+    const updatePayload: Record<string, any> = {
+      currentToken: newCurrentToken,
       waitingCount: nextWaiting,
       entries: entries
-    });
+    };
+    if (lastCalledPatient) {
+      updatePayload.lastCalledPatient = lastCalledPatient;
+    }
+    await updateDoc(queueDocRef, updatePayload);
 
     if (skippedPatientId) {
       await logQueueEvent(queueId, 'skip', skippedPatientId);
@@ -325,7 +389,8 @@ export async function pauseQueue(queueId: string, estimatedResumeTime: string) {
   const queueDocRef = doc(db, 'queues', queueId);
   await updateDoc(queueDocRef, {
     status: 'paused',
-    estimatedResumeTime
+    estimatedResumeTime,
+    pauseStartedAt: new Date().toISOString()
   });
 }
 
@@ -334,7 +399,8 @@ export async function resumeQueue(queueId: string) {
   const queueDocRef = doc(db, 'queues', queueId);
   await updateDoc(queueDocRef, {
     status: 'live',
-    estimatedResumeTime: deleteField()
+    estimatedResumeTime: deleteField(),
+    pauseStartedAt: deleteField()
   });
 }
 
@@ -364,21 +430,14 @@ export async function joinQueue(
   const data = docSnap.data();
   const currentEntries = data.entries || [];
   
-  // 2. Generate new token number
+  // 2. Generate new token number (immutable sequential numbering without reuse)
   const maxToken = currentEntries.reduce((max: number, entry: any) => Math.max(max, entry.tokenNumber || 0), 0);
-  const newTokenNumber = maxToken > 0 ? maxToken + 1 : 1;
+  const lastAssigned = data.lastAssignedToken || 0;
+  const newTokenNumber = Math.max(maxToken, lastAssigned) + 1;
   const entryId = `entry-${Date.now()}`;
   
-  // 3. Determine status
-  const hasServing = currentEntries.some((e: any) => e.status === 'serving');
-  const hasNext = currentEntries.some((e: any) => e.status === 'next');
-  
-  let status: 'waiting' | 'next' | 'serving' = 'waiting';
-  if (!hasServing) {
-    status = 'serving';
-  } else if (!hasNext) {
-    status = 'next';
-  }
+  // 3. Determine status - Never auto-advance! All joining customers start in 'waiting' status
+  const status: 'waiting' | 'next' | 'serving' = 'waiting';
 
   const newEntry = {
     id: entryId,
@@ -391,10 +450,11 @@ export async function joinQueue(
     appointmentId: appointmentId || ''
   };
 
-  // 4. Update the doc: append newEntry and increment waitingCount
+  // 4. Update the doc: append newEntry, increment waitingCount, and persist lastAssignedToken
   await updateDoc(queueDocRef, {
     entries: arrayUnion(newEntry),
-    waitingCount: increment(1)
+    waitingCount: increment(1),
+    lastAssignedToken: newTokenNumber
   });
 
   await logQueueEvent(queueId, 'join', entryId);
@@ -411,3 +471,100 @@ export async function joinQueue(
 
   return entryId;
 }
+
+export async function recallLastPatient(queueId: string) {
+  const { getDoc } = await import('firebase/firestore');
+  const queueDocRef = doc(db, 'queues', queueId);
+  const docSnap = await getDoc(queueDocRef);
+  if (docSnap.exists()) {
+    const data = docSnap.data();
+    const target = data.lastCalledPatient || (data.entries || []).find((e: any) => e.status === 'serving');
+    if (target) {
+      await logQueueEvent(queueId, 'call', target.id);
+    }
+  }
+}
+
+export async function updateLastPatientStatus(queueId: string, status: 'completed' | 'no-show') {
+  const { getDoc } = await import('firebase/firestore');
+  const queueDocRef = doc(db, 'queues', queueId);
+  const docSnap = await getDoc(queueDocRef);
+  if (docSnap.exists()) {
+    const data = docSnap.data();
+    if (data.lastCalledPatient) {
+      const updated = { ...data.lastCalledPatient, status };
+      await updateDoc(queueDocRef, { lastCalledPatient: updated });
+      await saveCustomerRecord(updated.customerName, queueId, status === 'completed' ? 'Served' : 'Skipped', {
+        patientId: updated.id,
+        phone: updated.phoneNumber || '',
+        businessId: data.businessId || data.locationId || '',
+        queueName: data.name || '',
+        tokenNumber: updated.tokenNumber
+      });
+    }
+  }
+}
+
+export async function returnLastPatientToQueue(queueId: string) {
+  const { arrayUnion, deleteField, getDoc } = await import('firebase/firestore');
+  const queueDocRef = doc(db, 'queues', queueId);
+  const docSnap = await getDoc(queueDocRef);
+  if (docSnap.exists()) {
+    const data = docSnap.data();
+    if (data.lastCalledPatient) {
+      const p = data.lastCalledPatient;
+      const returnedEntry = {
+        id: p.id,
+        tokenNumber: p.tokenNumber,
+        customerName: p.customerName,
+        phoneNumber: p.phoneNumber || '',
+        joinedAt: new Date().toISOString(),
+        status: 'waiting',
+        isAppointment: false,
+        appointmentId: ''
+      };
+      await updateDoc(queueDocRef, {
+        entries: arrayUnion(returnedEntry),
+        waitingCount: increment(1),
+        lastCalledPatient: deleteField()
+      });
+    }
+  }
+}
+
+export async function updateLastCalledPatientStatus(queueId: string, status: 'completed' | 'no-show') {
+  const queueDocRef = doc(db, 'queues', queueId);
+  const docSnap = await getDoc(queueDocRef);
+  if (docSnap.exists()) {
+    const data = docSnap.data();
+    if (data.lastCalledPatient) {
+      await updateDoc(queueDocRef, {
+        lastCalledPatient: {
+          ...data.lastCalledPatient,
+          status: status,
+          updatedAt: new Date().toISOString()
+        }
+      });
+    }
+  }
+}
+
+export async function recallLastCalledPatient(queueId: string) {
+  const queueDocRef = doc(db, 'queues', queueId);
+  const docSnap = await getDoc(queueDocRef);
+  if (docSnap.exists()) {
+    const data = docSnap.data();
+    if (data.lastCalledPatient) {
+      const p = data.lastCalledPatient;
+      await updateDoc(queueDocRef, {
+        lastCalledPatient: {
+          ...p,
+          calledAt: new Date().toISOString(),
+          recalledCount: (p.recalledCount || 0) + 1
+        }
+      });
+      await logQueueEvent(queueId, 'recall', p.id);
+    }
+  }
+}
+

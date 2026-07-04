@@ -14,6 +14,11 @@ export default function CustomerPublicQueuePage({ params }: PageProps) {
   const { queueId } = use(params);
   const [isMounted, setIsMounted] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showOtpModal, setShowOtpModal] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
+  const [simulatedOtpHint, setSimulatedOtpHint] = useState<string | null>(null);
+  const [pendingPhone, setPendingPhone] = useState<string>('');
 
   // Zustand Store
   const queues = useQueueStore((state) => state.queues);
@@ -165,6 +170,33 @@ export default function CustomerPublicQueuePage({ params }: PageProps) {
         return;
       }
       phone = enteredPhone.trim();
+    } else {
+      const enteredPhone = window.prompt("Enter your mobile number for SMS notifications (Optional, press OK or Cancel to skip):");
+      if (enteredPhone && enteredPhone.trim()) {
+        phone = enteredPhone.trim();
+      }
+    }
+
+    if (phone) {
+      const isVerified = localStorage.getItem(`verified_phone_${phone}`) === 'true';
+      if (!isVerified) {
+        setPendingPhone(phone);
+        setShowOtpModal(true);
+        try {
+          const res = await fetch('/api/otp/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone })
+          });
+          const data = await res.json();
+          if (data.simulated && data.devOtp) {
+            setSimulatedOtpHint(data.devOtp);
+          }
+        } catch (err) {
+          console.error('Failed to send OTP:', err);
+        }
+        return;
+      }
     }
 
     setIsSubmitting(true);
@@ -291,7 +323,7 @@ export default function CustomerPublicQueuePage({ params }: PageProps) {
         {/* Main Content Area */}
         <main style={{ flex: 1, padding: '32px 24px', display: 'flex', flexDirection: 'column', gap: '28px' }}>
           
-          {queue.isHalted && (
+          {queue.isHalted ? (
             <div style={{
               background: '#fef2f2',
               border: '1px solid #fee2e2',
@@ -304,7 +336,20 @@ export default function CustomerPublicQueuePage({ params }: PageProps) {
             }}>
               ⚠️ <strong>Notice:</strong> This queue has reached capacity and is not accepting new walk-ins at this time.
             </div>
-          )}
+          ) : queue.status === 'paused' ? (
+            <div style={{
+              background: '#fff7ed',
+              border: '1px solid #fed7aa',
+              borderRadius: '12px',
+              padding: '16px',
+              color: '#9a3412',
+              fontSize: '13px',
+              lineHeight: 1.5,
+              fontWeight: 500
+            }}>
+              ⏸️ <strong>Queue Paused:</strong> This queue is temporarily paused. Estimated resume time: <strong>{queue.estimatedResumeTime || 'soon'}</strong>. Please stay in line!
+            </div>
+          ) : null}
 
           {/* Metrics Panel */}
           <div style={{
@@ -438,6 +483,82 @@ export default function CustomerPublicQueuePage({ params }: PageProps) {
           </div>
         </footer>
       </div>
+      {showOtpModal && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', zIndex: 9999, padding: '20px'
+        }}>
+          <div style={{
+            background: 'white', borderRadius: '16px', padding: '24px', maxWidth: '400px', width: '100%',
+            boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)', textAlign: 'center'
+          }}>
+            <div style={{ fontSize: '32px', marginBottom: '12px' }}>📱</div>
+            <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0f172a', marginBottom: '8px' }}>Verify Your Mobile</h3>
+            <p style={{ fontSize: '13px', color: '#64748b', lineHeight: 1.5, marginBottom: '16px' }}>
+              We sent a 6-digit verification code to <strong>{pendingPhone}</strong>.
+            </p>
+            {simulatedOtpHint && (
+              <div style={{ background: '#fef9c3', border: '1px solid #fde047', color: '#854d0e', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 600, marginBottom: '16px' }}>
+                💡 Dev Mode Hint: Your code is {simulatedOtpHint}
+              </div>
+            )}
+            <input
+              type="text"
+              maxLength={6}
+              placeholder="Enter 6-digit code"
+              value={otpCode}
+              onChange={(e) => setOtpCode(e.target.value)}
+              style={{
+                width: '100%', padding: '12px', fontSize: '18px', textAlign: 'center', letterSpacing: '0.2em',
+                border: '2px solid #cbd5e1', borderRadius: '8px', marginBottom: '16px', outline: 'none', boxSizing: 'border-box'
+              }}
+            />
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={() => { setShowOtpModal(false); setOtpCode(''); setSimulatedOtpHint(null); }}
+                style={{ flex: 1, padding: '12px', minHeight: '44px', background: '#f1f5f9', color: '#475569', borderRadius: '8px', fontWeight: 600, border: 'none', cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isVerifyingOtp || otpCode.length < 4}
+                onClick={async () => {
+                  setIsVerifyingOtp(true);
+                  try {
+                    const res = await fetch('/api/otp/verify', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ phone: pendingPhone, code: otpCode })
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                      localStorage.setItem(`verified_phone_${pendingPhone}`, 'true');
+                      setShowOtpModal(false);
+                      setOtpCode('');
+                      setSimulatedOtpHint(null);
+                      setIsSubmitting(true);
+                      await joinQueue(queueId, 'Walk-in Customer', pendingPhone);
+                    } else {
+                      alert(data.error || 'Invalid OTP code');
+                    }
+                  } catch (err) {
+                    console.error('OTP verify error:', err);
+                    alert('Verification failed. Please try again.');
+                  } finally {
+                    setIsVerifyingOtp(false);
+                    setIsSubmitting(false);
+                  }
+                }}
+                style={{ flex: 1, padding: '12px', minHeight: '44px', background: primaryColor, color: 'white', borderRadius: '8px', fontWeight: 600, border: 'none', cursor: 'pointer' }}
+              >
+                {isVerifyingOtp ? 'Verifying...' : 'Verify & Join'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -14,10 +14,10 @@ export interface CountryData {
 }
 
 export const COUNTRIES: CountryData[] = [
+  { name: 'India', code: 'IN', dialCode: '+91', flag: '🇮🇳', minLength: 10, maxLength: 10, placeholder: '98765 43210' },
   { name: 'United States', code: 'US', dialCode: '+1', flag: '🇺🇸', minLength: 10, maxLength: 10, placeholder: '(555) 000-0000' },
   { name: 'Canada', code: 'CA', dialCode: '+1', flag: '🇨🇦', minLength: 10, maxLength: 10, placeholder: '(555) 000-0000' },
   { name: 'United Kingdom', code: 'GB', dialCode: '+44', flag: '🇬🇧', minLength: 9, maxLength: 10, placeholder: '7000 000000' },
-  { name: 'India', code: 'IN', dialCode: '+91', flag: '🇮🇳', minLength: 10, maxLength: 10, placeholder: '98765 43210' },
   { name: 'Australia', code: 'AU', dialCode: '+61', flag: '🇦🇺', minLength: 9, maxLength: 9, placeholder: '400 000 000' },
   { name: 'Germany', code: 'DE', dialCode: '+49', flag: '🇩🇪', minLength: 10, maxLength: 11, placeholder: '151 00000000' },
   { name: 'France', code: 'FR', dialCode: '+33', flag: '🇫🇷', minLength: 9, maxLength: 9, placeholder: '6 00 00 00 00' },
@@ -207,7 +207,7 @@ export default function PhoneInput({
           border: '1px solid #cbd5e1',
           borderTopRightRadius: '8px',
           borderBottomRightRadius: '8px',
-          fontSize: '13px',
+          fontSize: '16px',
           color: '#0f172a',
           outline: 'none',
           boxSizing: 'border-box',

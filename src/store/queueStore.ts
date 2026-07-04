@@ -157,10 +157,9 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     await dbCallNext(queueId);
   },
 
-  recallCustomer: (queueId) => {
-    // In a real app this would trigger an audio call or push notification.
-    // For our mock, we can trigger a visual alert.
-    console.log(`Recalling customer for queue: ${queueId}`);
+  recallCustomer: async (queueId) => {
+    const { recallLastCalledPatient } = await import('../services/queueService');
+    await recallLastCalledPatient(queueId);
   },
 
   provisionStaff: (name, email, queueId) => {

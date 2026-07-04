@@ -8,9 +8,12 @@ export interface CustomerRecord {
   queueId: string;
   queueName: string;
   tokenNumber: number;
-  status: 'Waiting' | 'Served' | 'Skipped';
+  status: 'Waiting' | 'Served' | 'Skipped' | 'Completed' | 'No-Show' | string;
   joinedAt: string;
+  completedAt?: string;
+  waitTimeMin?: number;
   businessId: string;
+  date?: string;
 }
 
 /**
@@ -19,7 +22,7 @@ export interface CustomerRecord {
 export async function saveCustomerRecord(
   patientName: string,
   queueId: string,
-  status: 'Waiting' | 'Served' | 'Skipped',
+  status: 'Waiting' | 'Served' | 'Skipped' | 'Completed' | 'No-Show' | string,
   extra: { 
     patientId: string; 
     phone: string; 
@@ -29,9 +32,13 @@ export async function saveCustomerRecord(
   }
 ): Promise<void> {
   try {
+    const { getDoc } = await import('firebase/firestore');
     const customerDocRef = doc(db, 'customers', extra.patientId);
     
-    const dataToSave: Partial<CustomerRecord> = {
+    const nowStr = new Date().toISOString();
+    const todayDate = nowStr.split('T')[0];
+
+    const dataToSave: Record<string, any> = {
       id: extra.patientId,
       name: patientName,
       queueId,
@@ -39,12 +46,25 @@ export async function saveCustomerRecord(
       status,
       phone: extra.phone,
       businessId: extra.businessId,
-      tokenNumber: extra.tokenNumber
+      tokenNumber: extra.tokenNumber,
+      date: todayDate
     };
 
-    // Only set joinedAt if it's the initial check-in (Waiting status)
     if (status === 'Waiting') {
-      dataToSave.joinedAt = new Date().toISOString();
+      dataToSave.joinedAt = nowStr;
+    } else {
+      dataToSave.completedAt = nowStr;
+      // Try to calculate waitTimeMin if doc already exists
+      try {
+        const existingSnap = await getDoc(customerDocRef);
+        if (existingSnap.exists() && existingSnap.data().joinedAt) {
+          const joinedTime = new Date(existingSnap.data().joinedAt).getTime();
+          const diffMin = Math.round((Date.now() - joinedTime) / 60000);
+          dataToSave.waitTimeMin = Math.max(0, diffMin);
+        }
+      } catch (e) {
+        // Ignore check
+      }
     }
 
     await setDoc(customerDocRef, dataToSave, { merge: true });

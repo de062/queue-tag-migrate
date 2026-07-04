@@ -248,10 +248,12 @@ export default function CustomersPage() {
                   <tbody>
                     {paginatedCustomers.length > 0 ? (
                       paginatedCustomers.map((customer, idx) => {
-                        const statusColors = {
+                        const statusColors: Record<string, { bg: string; text: string; border: string }> = {
                           Waiting: { bg: '#eff6ff', text: '#2563eb', border: '#dbeafe' },
                           Served: { bg: '#ecfdf5', text: '#10b981', border: '#d1fae5' },
+                          Completed: { bg: '#ecfdf5', text: '#10b981', border: '#d1fae5' },
                           Skipped: { bg: '#fef2f2', text: '#ef4444', border: '#fee2e2' },
+                          'No-Show': { bg: '#fef2f2', text: '#ef4444', border: '#fee2e2' },
                         };
                         const colorSet = statusColors[customer.status] || statusColors.Waiting;
 

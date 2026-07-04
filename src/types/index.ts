@@ -29,6 +29,16 @@ export interface Queue {
   role?: string;
   status: 'live' | 'paused';
   estimatedResumeTime?: string;
+  pauseStartedAt?: string;
+  lastAssignedToken?: number;
+  lastCalledPatient?: {
+    id: string;
+    customerName: string;
+    tokenNumber: number;
+    phoneNumber?: string;
+    calledAt: string;
+    status: 'served' | 'completed' | 'no-show' | 'skipped';
+  };
   workingHours: string;
   averageWaitTimeMin: number;
   totalServedToday: number;

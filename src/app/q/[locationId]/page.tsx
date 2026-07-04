@@ -53,6 +53,12 @@ export default function CustomerPortal({ params }: PageProps) {
   const [joinedAtTime, setJoinedAtTime] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isPhoneValid, setIsPhoneValid] = useState(true);
+  const [manualSearchQuery, setManualSearchQuery] = useState('');
+  const [showOtpModal, setShowOtpModal] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
+  const [simulatedOtpHint, setSimulatedOtpHint] = useState<string | null>(null);
+  const [pendingJoinArgs, setPendingJoinArgs] = useState<{ queueId: string; name: string; phone: string } | null>(null);
 
   // Real-time Firestore Sync & Verification States
   const initLiveSync = useQueueStore((state) => state.initLiveSync);
@@ -362,6 +368,28 @@ export default function CustomerPortal({ params }: PageProps) {
       return;
     }
 
+    if (phoneNumber.trim()) {
+      const isVerified = localStorage.getItem(`verified_phone_${phoneNumber.trim()}`) === 'true';
+      if (!isVerified) {
+        setPendingJoinArgs({ queueId: selectedQueueId, name: fullName, phone: phoneNumber.trim() });
+        setShowOtpModal(true);
+        try {
+          const res = await fetch('/api/otp/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone: phoneNumber.trim() })
+          });
+          const data = await res.json();
+          if (data.simulated && data.devOtp) {
+            setSimulatedOtpHint(data.devOtp);
+          }
+        } catch (err) {
+          console.error('Failed to send OTP:', err);
+        }
+        return;
+      }
+    }
+
     setIsSubmitting(true);
     try {
       const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -408,7 +436,10 @@ export default function CustomerPortal({ params }: PageProps) {
     ).length;
 
     // Estimated wait time
-    const waitMin = Math.max(5, peopleAhead * 3 + 3);
+    const waitMin = Math.max(5, peopleAhead * (queue.averageWaitTimeMin || 15));
+    if (queue.status === 'paused') {
+      return `~${waitMin} min (Paused - Resumes ${queue.estimatedResumeTime || 'soon'})`;
+    }
     return `~${waitMin} min`;
   };
 
@@ -526,8 +557,37 @@ export default function CustomerPortal({ params }: PageProps) {
               </div>
             )}
 
+            <div style={{ padding: '16px 20px 0 20px', width: '100%', boxSizing: 'border-box' }}>
+              <div style={{ background: 'white', border: '1px solid #cbd5e1', borderRadius: '12px', padding: '12px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                <div style={{ fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span>🔍 No QR Code? Search Clinic or Enter Queue ID</span>
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="text"
+                    placeholder="Enter clinic code or queue name..."
+                    value={manualSearchQuery}
+                    onChange={(e) => setManualSearchQuery(e.target.value)}
+                    style={{ flex: 1, padding: '10px 12px', fontSize: '16px', border: '1px solid #e2e8f0', borderRadius: '6px', outline: 'none' }}
+                  />
+                  {manualSearchQuery && (
+                    <button
+                      onClick={() => setManualSearchQuery('')}
+                      style={{ background: '#f1f5f9', border: 'none', padding: '0 12px', minHeight: '44px', borderRadius: '6px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
             <div className="card-grid">
-              {Object.values(queues).map((queue) => {
+              {Object.values(queues).filter(q => {
+                if (!manualSearchQuery.trim()) return true;
+                const query = manualSearchQuery.toLowerCase();
+                return q.name.toLowerCase().includes(query) || q.id.toLowerCase().includes(query) || (q.role && q.role.toLowerCase().includes(query));
+              }).map((queue) => {
                 const isPaused = queue.status === 'paused';
                 const isHalted = !!queue.isHalted;
                 const isAppointmentEnabled = !!queue.isAppointmentEnabled;
@@ -1321,6 +1381,87 @@ export default function CustomerPortal({ params }: PageProps) {
           <span>QueueTag</span>
         </div>
       </footer>
+      {showOtpModal && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', zIndex: 9999, padding: '20px'
+        }}>
+          <div style={{
+            background: 'white', borderRadius: '16px', padding: '24px', maxWidth: '400px', width: '100%',
+            boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)', textAlign: 'center'
+          }}>
+            <div style={{ fontSize: '32px', marginBottom: '12px' }}>📱</div>
+            <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0f172a', marginBottom: '8px' }}>Verify Your Mobile</h3>
+            <p style={{ fontSize: '13px', color: '#64748b', lineHeight: 1.5, marginBottom: '16px' }}>
+              We sent a 6-digit verification code to <strong>{pendingJoinArgs?.phone}</strong>.
+            </p>
+            {simulatedOtpHint && (
+              <div style={{ background: '#fef9c3', border: '1px solid #fde047', color: '#854d0e', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 600, marginBottom: '16px' }}>
+                💡 Dev Mode Hint: Your code is {simulatedOtpHint}
+              </div>
+            )}
+            <input
+              type="text"
+              maxLength={6}
+              placeholder="Enter 6-digit code"
+              value={otpCode}
+              onChange={(e) => setOtpCode(e.target.value)}
+              style={{
+                width: '100%', padding: '12px', fontSize: '18px', textAlign: 'center', letterSpacing: '0.2em',
+                border: '2px solid #cbd5e1', borderRadius: '8px', marginBottom: '16px', outline: 'none', boxSizing: 'border-box'
+              }}
+            />
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={() => { setShowOtpModal(false); setOtpCode(''); setSimulatedOtpHint(null); }}
+                style={{ flex: 1, padding: '12px', minHeight: '44px', background: '#f1f5f9', color: '#475569', borderRadius: '8px', fontWeight: 600, border: 'none', cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isVerifyingOtp || otpCode.length < 4}
+                onClick={async () => {
+                  if (!pendingJoinArgs) return;
+                  setIsVerifyingOtp(true);
+                  try {
+                    const res = await fetch('/api/otp/verify', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ phone: pendingJoinArgs.phone, code: otpCode })
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                      localStorage.setItem(`verified_phone_${pendingJoinArgs.phone}`, 'true');
+                      setShowOtpModal(false);
+                      setOtpCode('');
+                      setSimulatedOtpHint(null);
+                      setIsSubmitting(true);
+                      const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                      setJoinedAtTime(timeStr);
+                      await joinQueue(pendingJoinArgs.queueId, pendingJoinArgs.name, pendingJoinArgs.phone);
+                      setActiveStep('tracking');
+                      setIsJoined(true);
+                    } else {
+                      alert(data.error || 'Invalid OTP code');
+                    }
+                  } catch (err) {
+                    console.error('OTP verify error:', err);
+                    alert('Verification failed. Please try again.');
+                  } finally {
+                    setIsVerifyingOtp(false);
+                    setIsSubmitting(false);
+                  }
+                }}
+                style={{ flex: 1, padding: '12px', minHeight: '44px', background: primaryColor, color: 'white', borderRadius: '8px', fontWeight: 600, border: 'none', cursor: 'pointer' }}
+              >
+                {isVerifyingOtp ? 'Verifying...' : 'Verify & Join'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

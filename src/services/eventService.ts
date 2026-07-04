@@ -4,14 +4,14 @@ import { collection, addDoc } from 'firebase/firestore';
 export interface QueueEvent {
   id?: string;
   queueId: string;
-  action: 'join' | 'call' | 'skip';
+  action: 'join' | 'call' | 'skip' | 'recall' | 'completed' | 'no-show' | 'return' | string;
   patientId: string;
   timestamp: string; // ISO string
 }
 
 export async function logQueueEvent(
   queueId: string, 
-  action: 'join' | 'call' | 'skip', 
+  action: 'join' | 'call' | 'skip' | 'recall' | 'completed' | 'no-show' | 'return' | string, 
   patientId: string
 ): Promise<void> {
   try {

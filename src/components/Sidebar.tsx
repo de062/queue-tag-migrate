@@ -10,7 +10,8 @@ import {
   UserPlus, 
   Bell, 
   LogOut,
-  Calendar
+  Calendar,
+  Archive
 } from 'lucide-react';
 import { Suspense } from 'react';
 
@@ -91,6 +92,12 @@ function SidebarContent() {
       href: '/dashboard/customers',
       icon: Users,
       active: pathname === '/dashboard/customers'
+    },
+    {
+      label: 'Daily Archive',
+      href: '/dashboard/archive',
+      icon: Archive,
+      active: pathname === '/dashboard/archive'
     },
     {
       label: 'Announcements',

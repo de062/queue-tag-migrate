@@ -30,7 +30,7 @@ import {
   Phone
 } from 'lucide-react';
 import Link from 'next/link';
-import { callNextPatient, skipPatient, toggleHalt } from '@/services/queueService';
+import { callNextPatient, skipPatient, toggleHalt, returnLastPatientToQueue, updateLastCalledPatientStatus, recallLastCalledPatient, joinQueue } from '@/services/queueService';
 import { setAnnouncement, clearAnnouncement } from '@/services/announcementService';
 import { Queue } from '@/types';
 import { auth, db } from '@/lib/firebase';
@@ -153,6 +153,11 @@ export default function StaffConsolePage({ params }: PageProps) {
   const [followUpDateText, setFollowUpDateText] = useState('');
   const [followUpReasonText, setFollowUpReasonText] = useState('');
   const [isSavingFollowUp, setIsSavingFollowUp] = useState(false);
+  const [showAddWalkinModal, setShowAddWalkinModal] = useState(false);
+  const [walkinName, setWalkinName] = useState('');
+  const [walkinPhone, setWalkinPhone] = useState('');
+  const [isAddingWalkin, setIsAddingWalkin] = useState(false);
+  const [isUpdatingPrevious, setIsUpdatingPrevious] = useState(false);
 
   // Subscribe to business white-label details in real-time
   useEffect(() => {
@@ -872,6 +877,115 @@ export default function StaffConsolePage({ params }: PageProps) {
             {queue.isHalted ? 'Resume walk-ins (Open Queue)' : 'Halt walk-ins (Close Queue)'}
           </button>
         </div>
+
+        {/* STAFF-ASSISTED CHECK-IN CARD */}
+        <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '16px', marginBottom: '16px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <h3 style={{ fontSize: '14px', fontWeight: 700, color: '#0f172a', margin: 0 }}>Staff-Assisted Check-in</h3>
+              <p style={{ fontSize: '12px', color: '#64748b', margin: '2px 0 0 0' }}>Manually register walk-in patients</p>
+            </div>
+            <button
+              onClick={() => setShowAddWalkinModal(true)}
+              style={{ background: '#2563eb', color: 'white', border: 'none', padding: '10px 14px', minHeight: '44px', borderRadius: '8px', fontSize: '13px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              <span>+ Add Walk-in</span>
+            </button>
+          </div>
+        </div>
+
+        {/* PREVIOUS PATIENT / RECENTLY CALLED CARD */}
+        {queue.lastCalledPatient && (
+          <div style={{ background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '12px', padding: '16px', marginBottom: '16px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>
+              <div>
+                <h3 style={{ fontSize: '14px', fontWeight: 700, color: '#0f172a', margin: 0 }}>Previous Patient / Recently Called</h3>
+                <p style={{ fontSize: '11px', color: '#64748b', margin: '2px 0 0 0' }}>Called at {new Date(queue.lastCalledPatient.calledAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+              </div>
+              <span style={{ fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '4px', background: queue.lastCalledPatient.status === 'completed' || queue.lastCalledPatient.status === 'served' ? '#dcfce7' : '#fef3c7', color: queue.lastCalledPatient.status === 'completed' || queue.lastCalledPatient.status === 'served' ? '#166534' : '#b45309', textTransform: 'uppercase' }}>
+                {queue.lastCalledPatient.status}
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+              <div>
+                <span style={{ fontSize: '20px', fontWeight: 800, color: '#0f172a', marginRight: '8px' }}>#{queue.lastCalledPatient.tokenNumber}</span>
+                <span style={{ fontSize: '14px', fontWeight: 600, color: '#334155' }}>{queue.lastCalledPatient.customerName}</span>
+              </div>
+              {queue.lastCalledPatient.phoneNumber && (
+                <span style={{ fontSize: '12px', color: '#64748b' }}>{queue.lastCalledPatient.phoneNumber}</span>
+              )}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+              <button
+                onClick={async () => {
+                  setIsUpdatingPrevious(true);
+                  try {
+                    await recallLastCalledPatient(queueId);
+                    alert(`Recalled ${queue.lastCalledPatient?.customerName}! Notification triggered.`);
+                  } catch (err) {
+                    console.error('Recall error:', err);
+                  } finally {
+                    setIsUpdatingPrevious(false);
+                  }
+                }}
+                disabled={isUpdatingPrevious}
+                style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', padding: '10px', minHeight: '44px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
+              >
+                <span>Recall (Call Again)</span>
+              </button>
+              <button
+                onClick={async () => {
+                  setIsUpdatingPrevious(true);
+                  try {
+                    await returnLastPatientToQueue(queueId);
+                  } catch (err) {
+                    console.error('Return error:', err);
+                  } finally {
+                    setIsUpdatingPrevious(false);
+                  }
+                }}
+                disabled={isUpdatingPrevious}
+                style={{ background: '#fef3c7', color: '#b45309', border: '1px solid #fde68a', padding: '10px', minHeight: '44px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
+              >
+                <span>Return to Queue</span>
+              </button>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+              <button
+                onClick={async () => {
+                  setIsUpdatingPrevious(true);
+                  try {
+                    await updateLastCalledPatientStatus(queueId, 'completed');
+                  } catch (err) {
+                    console.error('Status error:', err);
+                  } finally {
+                    setIsUpdatingPrevious(false);
+                  }
+                }}
+                disabled={isUpdatingPrevious || queue.lastCalledPatient.status === 'completed'}
+                style={{ background: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0', padding: '10px', minHeight: '44px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
+              >
+                Mark Completed
+              </button>
+              <button
+                onClick={async () => {
+                  setIsUpdatingPrevious(true);
+                  try {
+                    await updateLastCalledPatientStatus(queueId, 'no-show');
+                  } catch (err) {
+                    console.error('Status error:', err);
+                  } finally {
+                    setIsUpdatingPrevious(false);
+                  }
+                }}
+                disabled={isUpdatingPrevious || queue.lastCalledPatient.status === 'no-show'}
+                style={{ background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca', padding: '10px', minHeight: '44px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
+              >
+                Mark No-Show
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* QUEUE ANNOUNCEMENT CARD */}
         <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '16px', marginBottom: '16px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
@@ -1662,6 +1776,78 @@ export default function StaffConsolePage({ params }: PageProps) {
             <span>QueueTag</span>
           </div>
         </footer>
+        {showAddWalkinModal && (
+          <div style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center',
+            justifyContent: 'center', zIndex: 9999, padding: '20px'
+          }}>
+            <div style={{
+              background: 'white', borderRadius: '16px', padding: '24px', maxWidth: '400px', width: '100%',
+              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)', textAlign: 'left'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <h3 style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', margin: 0 }}>Add Walk-in Customer</h3>
+                <button onClick={() => setShowAddWalkinModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }}>
+                  <X style={{ width: '20px', height: '20px' }} />
+                </button>
+              </div>
+              <form onSubmit={async (e) => {
+                e.preventDefault();
+                if (!walkinName.trim() || isAddingWalkin) return;
+                setIsAddingWalkin(true);
+                try {
+                  await joinQueue(queueId, walkinName.trim(), walkinPhone.trim() || undefined);
+                  setShowAddWalkinModal(false);
+                  setWalkinName('');
+                  setWalkinPhone('');
+                } catch (err) {
+                  console.error('Failed to add walkin:', err);
+                  alert('Failed to add walkin customer');
+                } finally {
+                  setIsAddingWalkin(false);
+                }
+              }}>
+                <div style={{ marginBottom: '14px' }}>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>Customer Name *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Enter patient name"
+                    value={walkinName}
+                    onChange={(e) => setWalkinName(e.target.value)}
+                    style={{ width: '100%', padding: '10px 12px', fontSize: '16px', border: '1px solid #cbd5e1', borderRadius: '8px', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>Phone Number (Optional)</label>
+                  <input
+                    type="tel"
+                    placeholder="+91..."
+                    value={walkinPhone}
+                    onChange={(e) => setWalkinPhone(e.target.value)}
+                    style={{ width: '100%', padding: '10px 12px', fontSize: '16px', border: '1px solid #cbd5e1', borderRadius: '8px', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddWalkinModal(false)}
+                    style={{ flex: 1, padding: '12px', minHeight: '44px', background: '#f1f5f9', color: '#475569', borderRadius: '8px', fontWeight: 600, border: 'none', cursor: 'pointer' }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isAddingWalkin || !walkinName.trim()}
+                    style={{ flex: 1, padding: '12px', minHeight: '44px', background: '#2563eb', color: 'white', borderRadius: '8px', fontWeight: 600, border: 'none', cursor: 'pointer' }}
+                  >
+                    {isAddingWalkin ? 'Adding...' : 'Add to Queue'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </div>
-    );
-  }
+  );
+}

@@ -71,6 +71,11 @@ service cloud.firestore {
       allow write: if isAuthenticated();
     }
 
+    // OTP verification codes
+    match /otps/{phone} {
+      allow read, write: if true;
+    }
+
     // System Health / Cron Metrics (written by server-side cron, read by admin dashboard)
     match /systemHealth/{docId} {
       allow read: if isAuthenticated(); // Only logged-in admins can read cron health metrics
