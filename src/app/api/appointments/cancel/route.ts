@@ -18,11 +18,22 @@ export async function POST(request: NextRequest) {
 
     const apptData = apptSnap.data();
     
-    const updateData: Record<string, any> = { status: 'cancelled' };
-    if (cancellationReason) {
-      updateData.cancellationReason = cancellationReason.trim();
+    // 1. Eliminate IDOR: Enforce that the appointment must have already been marked 'cancelled'
+    // in Firestore by an authorized staff member or admin via client SDK (guarded by Firestore Security Rules).
+    if (apptData.status !== 'cancelled') {
+      return NextResponse.json(
+        { error: 'Forbidden: Appointment status must be marked cancelled by authorized staff before dispatching notification' },
+        { status: 403 }
+      );
     }
-    await updateDoc(apptRef, updateData);
+
+    // 2. SMS Flood Protection: Check if notice was already sent
+    if (apptData.cancellationSmsSent) {
+      return NextResponse.json(
+        { error: 'Cancellation notice already dispatched for this appointment' },
+        { status: 400 }
+      );
+    }
 
     // Send cancellation SMS if phone number is present
     if (apptData.customerPhone) {
@@ -32,12 +43,19 @@ export async function POST(request: NextRequest) {
           apptData.customerName || 'Customer',
           apptData.date || '',
           apptData.startTime || '',
-          cancellationReason || ''
+          cancellationReason || apptData.cancellationReason || ''
         );
       } catch (err) {
         console.error('Failed to trigger SMS cancellation notice:', err);
       }
     }
+
+    // Lock future SMS dispatches for this appointment
+    const updateData: Record<string, any> = { cancellationSmsSent: true };
+    if (cancellationReason && !apptData.cancellationReason) {
+      updateData.cancellationReason = cancellationReason.trim();
+    }
+    await updateDoc(apptRef, updateData);
 
     return NextResponse.json({ success: true });
   } catch (err: any) {

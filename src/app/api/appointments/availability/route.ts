@@ -23,6 +23,8 @@ const minutesToTime = (m: number) => {
   return `${h}:${mins}`;
 };
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -35,6 +37,15 @@ export async function GET(request: NextRequest) {
         { error: 'Missing required query parameters: workspaceId, date, serviceId' },
         { status: 400 }
       );
+    }
+
+    // Input Validation & DoS Protection: Ensure IDs are well-formed and bounded
+    if (workspaceId.length > 100 || serviceId.length > 100 || !/^[a-zA-Z0-9_-]+$/.test(workspaceId) || !/^[a-zA-Z0-9_-]+$/.test(serviceId)) {
+      return NextResponse.json({ error: 'Invalid workspaceId or serviceId parameter format' }, { status: 400 });
+    }
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return NextResponse.json({ error: 'Invalid date format. Use YYYY-MM-DD.' }, { status: 400 });
     }
 
     // 1. Fetch the workspace document from Firestore
@@ -62,9 +73,6 @@ export async function GET(request: NextRequest) {
 
     // Parse date safely to find the weekday (avoiding timezone shifting)
     const dateParts = date.split('-');
-    if (dateParts.length !== 3) {
-      return NextResponse.json({ error: 'Invalid date format. Use YYYY-MM-DD.' }, { status: 400 });
-    }
     const year = parseInt(dateParts[0], 10);
     const month = parseInt(dateParts[1], 10) - 1;
     const day = parseInt(dateParts[2], 10);
@@ -74,6 +82,17 @@ export async function GET(request: NextRequest) {
     }
 
     const parsedDate = new Date(year, month, day);
+    if (isNaN(parsedDate.getTime())) {
+      return NextResponse.json({ error: 'Invalid date format. Use YYYY-MM-DD.' }, { status: 400 });
+    }
+
+    // Ensure date is within -30 days to +365 days to prevent DoS via extreme date loops
+    const now = new Date();
+    const diffDays = (parsedDate.getTime() - now.getTime()) / (1000 * 3600 * 24);
+    if (diffDays < -30 || diffDays > 365) {
+      return NextResponse.json({ error: 'Date out of acceptable range (-30 to +365 days)' }, { status: 400 });
+    }
+
     const dayOfWeek = parsedDate.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
 
     // Find the operatingHours for the specific day of the week requested
@@ -138,9 +157,16 @@ export async function GET(request: NextRequest) {
       return true;
     });
 
-    // Return the final array of clean, starting times
+    // Return the final array of clean, starting times with caching headers
     const result = availableSlots.map((s) => s.startTimeString);
-    return NextResponse.json({ slots: result });
+    return NextResponse.json(
+      { slots: result },
+      {
+        headers: {
+          'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=30'
+        }
+      }
+    );
   } catch (err: any) {
     console.error('Error calculating availability:', err);
     return NextResponse.json({ error: err.message || 'Internal Server Error' }, { status: 500 });
