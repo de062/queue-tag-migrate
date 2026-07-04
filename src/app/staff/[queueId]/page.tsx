@@ -244,6 +244,14 @@ export default function StaffConsolePage({ params }: PageProps) {
 
     setIsSubmittingCancellation(true);
     try {
+      const { doc, updateDoc } = await import('firebase/firestore');
+      const { db } = await import('@/lib/firebase');
+      const apptRef = doc(db, 'appointments', cancellingApptId);
+      await updateDoc(apptRef, { 
+        status: 'cancelled', 
+        cancellationReason: cancellationReasonText.trim() 
+      });
+
       const response = await fetch('/api/appointments/cancel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -307,6 +315,11 @@ export default function StaffConsolePage({ params }: PageProps) {
   const handleUpdateStatus = async (appointmentId: string, newStatus: 'completed' | 'cancelled') => {
     try {
       if (newStatus === 'cancelled') {
+        const { doc, updateDoc } = await import('firebase/firestore');
+        const { db } = await import('@/lib/firebase');
+        const apptRef = doc(db, 'appointments', appointmentId);
+        await updateDoc(apptRef, { status: 'cancelled' });
+
         const response = await fetch('/api/appointments/cancel', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
