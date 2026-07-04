@@ -26,6 +26,7 @@ import {
   Loader2,
   Megaphone,
   Calendar,
+  CalendarPlus,
   Phone
 } from 'lucide-react';
 import Link from 'next/link';
@@ -146,6 +147,13 @@ export default function StaffConsolePage({ params }: PageProps) {
   const [cancellationReasonText, setCancellationReasonText] = useState('');
   const [isSubmittingCancellation, setIsSubmittingCancellation] = useState(false);
 
+  // Follow-up modal states
+  const [showFollowUpModal, setShowFollowUpModal] = useState(false);
+  const [followUpCustomer, setFollowUpCustomer] = useState<{ id: string; name: string; phone: string } | null>(null);
+  const [followUpDateText, setFollowUpDateText] = useState('');
+  const [followUpReasonText, setFollowUpReasonText] = useState('');
+  const [isSavingFollowUp, setIsSavingFollowUp] = useState(false);
+
   // Subscribe to business white-label details in real-time
   useEffect(() => {
     const queueObj = queues[queueId];
@@ -255,6 +263,44 @@ export default function StaffConsolePage({ params }: PageProps) {
       alert('Failed to cancel appointment. Please try again.');
     } finally {
       setIsSubmittingCancellation(false);
+    }
+  };
+
+  const handleSaveFollowUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!followUpCustomer || !followUpDateText || !followUpReasonText.trim() || isSavingFollowUp) return;
+
+    setIsSavingFollowUp(true);
+    try {
+      const queueObj = queues[queueId];
+      const workspaceId = queueObj?.businessId || '';
+
+      const response = await fetch('/api/appointments/follow-up', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId,
+          customerId: followUpCustomer.id,
+          customerName: followUpCustomer.name,
+          customerPhone: followUpCustomer.phone,
+          followUpDate: followUpDateText,
+          reason: followUpReasonText.trim()
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save follow-up');
+      }
+
+      alert('Follow-up scheduled successfully');
+      setShowFollowUpModal(false);
+      setFollowUpCustomer(null);
+      setFollowUpReasonText('');
+    } catch (err) {
+      console.error('Error saving follow-up:', err);
+      alert('Failed to save follow-up. Please try again.');
+    } finally {
+      setIsSavingFollowUp(false);
     }
   };
 
@@ -585,6 +631,39 @@ export default function StaffConsolePage({ params }: PageProps) {
                 </>
               ) : 'No patient is active'}
             </div>
+            {servingCustomer && (
+              <div style={{ display: 'flex', justifyContent: 'center', marginTop: '10px' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFollowUpCustomer({
+                      id: servingCustomer.id,
+                      name: servingCustomer.customerName,
+                      phone: servingCustomer.phoneNumber || ''
+                    });
+                    setFollowUpDateText(new Date().toISOString().split('T')[0]);
+                    setFollowUpReasonText('');
+                    setShowFollowUpModal(true);
+                  }}
+                  style={{
+                    background: '#eff6ff',
+                    color: '#2563eb',
+                    border: '1px solid #bfdbfe',
+                    borderRadius: '6px',
+                    padding: '4px 10px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                >
+                  <CalendarPlus style={{ width: '12px', height: '12px' }} />
+                  <span>Schedule Follow-up</span>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Next customer hint */}
@@ -901,13 +980,14 @@ export default function StaffConsolePage({ params }: PageProps) {
           </div>
 
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', textAlign: 'left' }}>
+             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', textAlign: 'left' }}>
               <thead>
                 <tr style={{ background: '#f8fafc', color: '#64748b', fontWeight: 600, borderBottom: '1px solid #f1f5f9' }}>
                   <th style={{ padding: '10px 16px' }}>TOKEN</th>
                   <th style={{ padding: '10px 16px' }}>PATIENT NAME</th>
                   <th style={{ padding: '10px 16px' }}>WAIT TIME</th>
                   <th style={{ padding: '10px 16px' }}>STATUS</th>
+                  <th style={{ padding: '10px 16px', textAlign: 'center' }}>FOLLOW-UP</th>
                 </tr>
               </thead>
               <tbody>
@@ -946,12 +1026,44 @@ export default function StaffConsolePage({ params }: PageProps) {
                             {entry.status === 'next' ? 'Next' : 'Waiting'}
                           </span>
                         </td>
+                        <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFollowUpCustomer({
+                                id: entry.id,
+                                name: entry.customerName,
+                                phone: entry.phoneNumber || ''
+                              });
+                              setFollowUpDateText(new Date().toISOString().split('T')[0]);
+                              setFollowUpReasonText('');
+                              setShowFollowUpModal(true);
+                            }}
+                            style={{
+                              background: '#eff6ff',
+                              color: '#2563eb',
+                              border: '1px solid #bfdbfe',
+                              borderRadius: '6px',
+                              padding: '4px 8px',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              margin: '0 auto'
+                            }}
+                          >
+                            <CalendarPlus style={{ width: '12px', height: '12px' }} />
+                            <span>Schedule</span>
+                          </button>
+                        </td>
                       </tr>
                     );
                   })
                 ) : (
                   <tr>
-                    <td colSpan={4} style={{ padding: '24px', textAlign: 'center', color: '#94a3b8', fontStyle: 'italic' }}>
+                    <td colSpan={5} style={{ padding: '24px', textAlign: 'center', color: '#94a3b8', fontStyle: 'italic' }}>
                       {searchQuery ? 'No matching patients found' : 'Queue is empty'}
                     </td>
                   </tr>
@@ -1026,8 +1138,37 @@ export default function StaffConsolePage({ params }: PageProps) {
                             </div>
                           </div>
                           
-                          {/* Actions button group */}
-                          <div style={{ display: 'flex', gap: '6px' }}>
+                           {/* Actions button group */}
+                          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setFollowUpCustomer({
+                                  id: appt.customerId || '',
+                                  name: appt.customerName,
+                                  phone: appt.customerPhone || ''
+                                });
+                                setFollowUpDateText(new Date().toISOString().split('T')[0]);
+                                setFollowUpReasonText('');
+                                setShowFollowUpModal(true);
+                              }}
+                              style={{
+                                background: '#3b82f6',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '6px',
+                                padding: '5px 10px',
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px'
+                              }}
+                            >
+                              <CalendarPlus style={{ width: '12px', height: '12px' }} />
+                              <span>Follow-up</span>
+                            </button>
                             {appt.status === 'scheduled' && (
                               <button
                                 type="button"
@@ -1318,6 +1459,163 @@ export default function StaffConsolePage({ params }: PageProps) {
                   }}
                 >
                   {isSubmittingCancellation ? 'Cancelling...' : 'Confirm Cancellation'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* FOLLOW-UP MODAL POPUP DIALOG */}
+      {showFollowUpModal && followUpCustomer && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(15, 23, 42, 0.4)',
+          backdropFilter: 'blur(3px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          padding: '20px'
+        }}>
+          <div className="gateway-card" style={{
+            maxWidth: '400px',
+            width: '100%',
+            padding: '28px',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+            border: '1px solid #cbd5e1',
+            background: 'white',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '16px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', paddingBottom: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, color: '#0f172a', fontSize: '16px' }}>
+                <CalendarPlus style={{ width: '18px', height: '18px', color: '#2563eb' }} />
+                <span>Schedule Follow-up</span>
+              </div>
+              <button 
+                onClick={() => {
+                  setShowFollowUpModal(false);
+                  setFollowUpCustomer(null);
+                  setFollowUpReasonText('');
+                }}
+                style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
+              >
+                <X style={{ width: '18px', height: '18px' }} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveFollowUp} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              
+              {/* Selected Customer Info Header */}
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px 14px' }}>
+                <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 600 }}>Client Selected</div>
+                <div style={{ fontSize: '14.5px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>{followUpCustomer.name}</div>
+                {followUpCustomer.phone && (
+                  <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>Phone: {followUpCustomer.phone}</div>
+                )}
+              </div>
+
+              {/* Date Input */}
+              <div className="form-group">
+                <label className="form-label" style={{ fontSize: '12.5px', fontWeight: 600, color: '#475569', marginBottom: '6px', display: 'block' }}>
+                  Follow-up Date (Required)
+                </label>
+                <input 
+                  type="date" 
+                  value={followUpDateText}
+                  onChange={(e) => setFollowUpDateText(e.target.value)}
+                  required
+                  disabled={isSavingFollowUp}
+                  className="form-input"
+                  style={{ 
+                    borderRadius: '6px', 
+                    fontSize: '13px', 
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    padding: '8px 10px',
+                    border: '1px solid #cbd5e1'
+                  }}
+                />
+              </div>
+
+              {/* Reason Input */}
+              <div className="form-group">
+                <label className="form-label" style={{ fontSize: '12.5px', fontWeight: 600, color: '#475569', marginBottom: '6px', display: 'block' }}>
+                  Reason for Follow-up / Notes (Required)
+                </label>
+                <textarea 
+                  placeholder="e.g. Check progress, routine maintenance, or next phase of service." 
+                  value={followUpReasonText} 
+                  onChange={(e) => setFollowUpReasonText(e.target.value)} 
+                  required
+                  disabled={isSavingFollowUp}
+                  className="form-input"
+                  style={{ 
+                    borderRadius: '6px', 
+                    fontSize: '12.5px', 
+                    minHeight: '90px', 
+                    fontFamily: 'inherit', 
+                    resize: 'vertical',
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    padding: '8px 10px',
+                    border: '1px solid #cbd5e1'
+                  }}
+                />
+              </div>
+
+              {/* Buttons */}
+              <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowFollowUpModal(false);
+                    setFollowUpCustomer(null);
+                    setFollowUpReasonText('');
+                  }}
+                  disabled={isSavingFollowUp}
+                  style={{
+                    flex: 1,
+                    background: '#f1f5f9',
+                    color: '#475569',
+                    border: '1px solid #cbd5e1',
+                    borderRadius: '6px',
+                    padding: '10px',
+                    fontSize: '13px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    textAlign: 'center'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingFollowUp || !followUpDateText || !followUpReasonText.trim()}
+                  style={{
+                    flex: 1,
+                    background: (isSavingFollowUp || !followUpDateText || !followUpReasonText.trim()) ? '#93c5fd' : '#2563eb',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    padding: '10px',
+                    fontSize: '13px',
+                    fontWeight: 600,
+                    cursor: (isSavingFollowUp || !followUpDateText || !followUpReasonText.trim()) ? 'default' : 'pointer',
+                    textAlign: 'center',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '4px'
+                  }}
+                >
+                  {isSavingFollowUp ? 'Saving...' : 'Save Follow-up'}
                 </button>
               </div>
             </form>
