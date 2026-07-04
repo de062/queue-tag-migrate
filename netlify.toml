@@ -1,0 +1,15 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[functions]
+  directory = "netlify/functions"
+
+# Scheduled cron job: auto-cancel no-show appointments every hour
+# Mirrors the Vercel "0 * * * *" schedule
+[[functions]]
+  name = "auto-cancel-cron"
+  schedule = "0 * * * *"
