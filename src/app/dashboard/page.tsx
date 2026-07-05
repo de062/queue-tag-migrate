@@ -52,8 +52,8 @@ function AdminDashboardContent() {
       return;
     }
 
-    console.log(`STEP 1: Dashboard Mounted, requesting sync for ${user.uid}`);
-    const unsubscribe = initLiveSync(user.uid);
+    console.log(`STEP 1: Dashboard Mounted, requesting sync for ${user.id}`);
+    const unsubscribe = initLiveSync(user.id);
     return () => {
       if (unsubscribe) {
         unsubscribe();
@@ -604,7 +604,7 @@ function AdminDashboardContent() {
       <QRCodeModal
         isOpen={showQrModal}
         onClose={() => setShowQrModal(false)}
-        businessId={user?.uid || ''}
+        businessId={user?.id || ''}
         businessName={businessName || location.name}
       />
 
@@ -615,7 +615,7 @@ function AdminDashboardContent() {
         isOpen={showAddQueueModal}
         onClose={() => setShowAddQueueModal(false)}
         onSubmit={async (name, role) => {
-          await createNewQueue(user?.uid || '', name, role);
+          await createNewQueue(user?.id || '', name, role);
           setToastMsg('New queue created successfully!');
           setTimeout(() => setToastMsg(null), 3000);
         }}

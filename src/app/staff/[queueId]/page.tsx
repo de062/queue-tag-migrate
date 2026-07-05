@@ -33,9 +33,7 @@ import Link from 'next/link';
 import { callNextPatient, skipPatient, toggleHalt, returnLastPatientToQueue, updateLastCalledPatientStatus, recallLastCalledPatient, joinQueue } from '@/services/queueService';
 import { setAnnouncement, clearAnnouncement } from '@/services/announcementService';
 import { Queue } from '@/types';
-import { auth, db } from '@/lib/firebase';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { doc, getDoc, collection, query, where, getDocs, onSnapshot } from 'firebase/firestore';
+import { supabase } from '@/lib/supabase';
 
 interface PageProps {
   params: Promise<{ queueId: string }>;
@@ -59,60 +57,90 @@ export default function StaffConsolePage({ params }: PageProps) {
   const recallCustomer = useQueueStore((state) => state.recallCustomer);
   const toggleHaltQueue = useQueueStore((state) => state.toggleHaltQueue);
 
-  // Real-time synchronization trigger specifically for this queueId
+  // Real-time synchronization for this specific queueId via Supabase channel
   useEffect(() => {
-    let unsubscribe: (() => void) | undefined;
-    
-    async function setupSync() {
-      try {
-        const { doc, onSnapshot } = await import('firebase/firestore');
-        const { db } = await import('@/lib/firebase');
-        const docRef = doc(db, 'queues', queueId);
-        
-        unsubscribe = onSnapshot(docRef, (docSnap) => {
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            const queueObj = {
-              id: docSnap.id,
-              locationId: data.businessId || data.locationId || '',
-              businessId: data.businessId || data.locationId || '',
-              name: data.name || '',
-              specialty: data.specialty || '',
-              status: data.status || 'live',
-              averageWaitTimeMin: data.averageWaitTimeMin || 15,
-              totalServedToday: data.totalServedToday || 0,
-              isAppointmentEnabled: data.isAppointmentEnabled || false,
-              isHalted: data.isHalted || false,
-              entries: data.entries || [],
-              currentToken: data.currentToken || 0,
-              waitingCount: data.waitingCount || 0,
-              workingHours: data.workingHours || '9:00 AM - 6:00 PM',
-              currentAnnouncement: data.currentAnnouncement || '',
-            } as Queue;
-            
-            // Update the Zustand store's queues record
+    const channel = supabase
+      .channel(`queue-detail:${queueId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'queues', filter: `id=eq.${queueId}` },
+        async () => {
+          const { data } = await supabase
+            .from('queues')
+            .select('*, queue_entries(*)')
+            .eq('id', queueId)
+            .single();
+          if (data) {
+            const entries = (data.queue_entries ?? [])
+              .filter((e: any) => ['waiting', 'next', 'serving'].includes(e.status))
+              .map((e: any) => ({
+                id: e.id,
+                tokenNumber: e.token_number,
+                customerName: e.customer_name,
+                phoneNumber: e.phone_number,
+                joinedAt: e.joined_at,
+                status: e.status,
+                isAppointment: e.is_appointment,
+                appointmentId: e.appointment_id,
+              }))
+              .sort((a: any, b: any) => a.tokenNumber - b.tokenNumber);
+            const queueObj: Queue = {
+              id: data.id,
+              locationId: data.business_id,
+              businessId: data.business_id,
+              name: data.name ?? '',
+              specialty: data.specialty ?? '',
+              status: data.status === 'live' ? 'live' : 'paused',
+              averageWaitTimeMin: data.average_wait_time_min ?? 15,
+              totalServedToday: data.total_served_today ?? 0,
+              isAppointmentEnabled: data.is_appointment_enabled ?? false,
+              isHalted: data.is_halted ?? false,
+              entries,
+              currentToken: data.current_token ?? 0,
+              waitingCount: data.waiting_count ?? 0,
+              workingHours: data.working_hours ?? '9:00 AM - 6:00 PM',
+              currentAnnouncement: data.current_announcement ?? '',
+              lastCalledPatient: data.last_called_patient ?? undefined,
+            };
+            useQueueStore.setState((state) => ({
+              queues: { ...state.queues, [queueId]: queueObj },
+            }));
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'queue_entries', filter: `queue_id=eq.${queueId}` },
+        async () => {
+          const { data } = await supabase
+            .from('queues')
+            .select('*, queue_entries(*)')
+            .eq('id', queueId)
+            .single();
+          if (data) {
             useQueueStore.setState((state) => ({
               queues: {
                 ...state.queues,
-                [queueId]: queueObj
-              }
+                [queueId]: {
+                  ...state.queues[queueId],
+                  entries: (data.queue_entries ?? [])
+                    .filter((e: any) => ['waiting', 'next', 'serving'].includes(e.status))
+                    .map((e: any) => ({
+                      id: e.id, tokenNumber: e.token_number, customerName: e.customer_name,
+                      phoneNumber: e.phone_number, joinedAt: e.joined_at, status: e.status,
+                      isAppointment: e.is_appointment, appointmentId: e.appointment_id,
+                    }))
+                    .sort((a: any, b: any) => a.tokenNumber - b.tokenNumber),
+                  waitingCount: data.waiting_count ?? 0,
+                },
+              },
             }));
           }
-        }, (err) => {
-          console.error('Error onSnapshot for queueId:', err);
-        });
-      } catch (err) {
-        console.error('Error setting up onSnapshot for queueId:', err);
-      }
-    }
-    
-    setupSync();
-    
-    return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
-    };
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [queueId]);
 
   // Local UI State
@@ -164,19 +192,27 @@ export default function StaffConsolePage({ params }: PageProps) {
     const queueObj = queues[queueId];
     if (!queueObj?.businessId) return;
 
-    const bizRef = doc(db, 'businesses', queueObj.businessId);
-    const unsubscribe = onSnapshot(bizRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setBusinessName(data.businessName || '');
-        setLogoUrl(data.logoUrl || '');
+    const fetchBranding = async () => {
+      const { data } = await supabase
+        .from('businesses')
+        .select('name, logo_url, services')
+        .eq('id', queueObj.businessId)
+        .single();
+      if (data) {
+        setBusinessName(data.name || '');
+        setLogoUrl(data.logo_url || '');
         setBusinessServices(data.services || []);
       }
-    }, (err) => {
-      console.error('Error listening to business branding in staff console:', err);
-    });
+    };
+    fetchBranding();
 
-    return () => unsubscribe();
+    const channel = supabase
+      .channel(`biz-branding:${queueObj.businessId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'businesses',
+          filter: `id=eq.${queueObj.businessId}` }, fetchBranding)
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [queueId, queues]);
 
   // Sync appointments in real-time
@@ -185,37 +221,40 @@ export default function StaffConsolePage({ params }: PageProps) {
     if (activeTab !== 'appointments' || !queueObj?.businessId) return;
 
     setIsLoadingAppointments(true);
-    const apptsRef = collection(db, 'appointments');
-    const q = query(
-      apptsRef,
-      where('workspaceId', '==', queueObj.businessId),
-      where('date', '==', appointmentsDate)
-    );
+    const businessId = queueObj.businessId;
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const fetched: any[] = [];
-      snapshot.forEach((docSnap) => {
-        fetched.push({
-          id: docSnap.id,
-          ...docSnap.data()
-        });
-      });
-
-      // Sort chronologically by startTime
-      fetched.sort((a, b) => {
-        const timeA = a.startTime || '';
-        const timeB = b.startTime || '';
-        return timeA.localeCompare(timeB);
-      });
-
-      setAppointments(fetched);
+    const fetchAppointments = async () => {
+      const { data, error } = await supabase
+        .from('appointments')
+        .select('*')
+        .eq('workspace_id', businessId)
+        .eq('date', appointmentsDate)
+        .order('start_time', { ascending: true });
+      if (!error) {
+        setAppointments(
+          (data ?? []).map((row) => ({
+            id: row.id,
+            workspaceId: row.workspace_id,
+            customerName: row.customer_name,
+            customerPhone: row.customer_phone,
+            date: row.date,
+            startTime: typeof row.start_time === 'string' ? row.start_time.slice(0, 5) : row.start_time,
+            endTime: typeof row.end_time === 'string' ? row.end_time.slice(0, 5) : row.end_time,
+            status: row.status,
+            cancellationReason: row.cancellation_reason,
+          }))
+        );
+      }
       setIsLoadingAppointments(false);
-    }, (err) => {
-      console.error('Error syncing appointments:', err);
-      setIsLoadingAppointments(false);
-    });
+    };
+    fetchAppointments();
 
-    return () => unsubscribe();
+    const channel = supabase
+      .channel(`appointments:${businessId}:${appointmentsDate}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'appointments' }, fetchAppointments)
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [activeTab, queueId, queues, appointmentsDate]);
 
   const formatTimeTo12Hour = (timeStr: string) => {
@@ -249,25 +288,20 @@ export default function StaffConsolePage({ params }: PageProps) {
 
     setIsSubmittingCancellation(true);
     try {
-      const { doc, updateDoc } = await import('firebase/firestore');
-      const { db } = await import('@/lib/firebase');
-      const apptRef = doc(db, 'appointments', cancellingApptId);
-      await updateDoc(apptRef, { 
-        status: 'cancelled', 
-        cancellationReason: cancellationReasonText.trim() 
-      });
+      await supabase.from('appointments').update({
+        status: 'cancelled',
+        cancellation_reason: cancellationReasonText.trim(),
+      }).eq('id', cancellingApptId);
 
       const response = await fetch('/api/appointments/cancel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          appointmentId: cancellingApptId, 
-          cancellationReason: cancellationReasonText.trim() 
-        })
+        body: JSON.stringify({
+          appointmentId: cancellingApptId,
+          cancellationReason: cancellationReasonText.trim(),
+        }),
       });
-      if (!response.ok) {
-        throw new Error('Server returned an error status');
-      }
+      if (!response.ok) throw new Error('Server returned an error status');
       setShowCancelModal(false);
       setCancellingApptId('');
       setCancellationReasonText('');
@@ -320,24 +354,15 @@ export default function StaffConsolePage({ params }: PageProps) {
   const handleUpdateStatus = async (appointmentId: string, newStatus: 'completed' | 'cancelled') => {
     try {
       if (newStatus === 'cancelled') {
-        const { doc, updateDoc } = await import('firebase/firestore');
-        const { db } = await import('@/lib/firebase');
-        const apptRef = doc(db, 'appointments', appointmentId);
-        await updateDoc(apptRef, { status: 'cancelled' });
-
+        await supabase.from('appointments').update({ status: 'cancelled' }).eq('id', appointmentId);
         const response = await fetch('/api/appointments/cancel', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ appointmentId })
+          body: JSON.stringify({ appointmentId }),
         });
-        if (!response.ok) {
-          throw new Error('Server returned an error status');
-        }
+        if (!response.ok) throw new Error('Server returned an error status');
       } else {
-        const { doc, updateDoc } = await import('firebase/firestore');
-        const { db } = await import('@/lib/firebase');
-        const apptRef = doc(db, 'appointments', appointmentId);
-        await updateDoc(apptRef, { status: newStatus });
+        await supabase.from('appointments').update({ status: newStatus }).eq('id', appointmentId);
       }
     } catch (err) {
       console.error('Error updating appointment status:', err);
@@ -346,33 +371,36 @@ export default function StaffConsolePage({ params }: PageProps) {
   };
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (!firebaseUser) {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!session?.user) {
         router.push('/staff/login');
         return;
       }
-
+      const user = session.user;
       try {
-        const staffDocRef = doc(db, 'staff', firebaseUser.uid);
-        const staffDocSnap = await getDoc(staffDocRef);
-
         let dbQueueId = '';
-        let staffName = firebaseUser.displayName || '';
+        let staffName = user.user_metadata?.full_name || '';
 
-        if (staffDocSnap.exists()) {
-          const data = staffDocSnap.data();
-          dbQueueId = data.assignedQueueId || data.queueId || '';
-          staffName = data.name || data.displayName || staffName;
+        // Look up staff record by user_id first
+        const { data: staffRow } = await supabase
+          .from('staff')
+          .select('*, staff_queue_assignments(queue_id)')
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+        if (staffRow) {
+          dbQueueId = staffRow.staff_queue_assignments?.[0]?.queue_id ?? '';
+          staffName = staffRow.name || staffName;
         } else {
-          const staffQuery = query(
-            collection(db, 'staff'),
-            where('email', '==', firebaseUser.email?.toLowerCase())
-          );
-          const querySnap = await getDocs(staffQuery);
-          if (!querySnap.empty) {
-            const data = querySnap.docs[0].data();
-            dbQueueId = data.assignedQueueId || data.queueId || '';
-            staffName = data.name || data.displayName || staffName;
+          // Fallback: look up by email
+          const { data: staffByEmail } = await supabase
+            .from('staff')
+            .select('*, staff_queue_assignments(queue_id)')
+            .eq('email', user.email?.toLowerCase() ?? '')
+            .maybeSingle();
+          if (staffByEmail) {
+            dbQueueId = staffByEmail.staff_queue_assignments?.[0]?.queue_id ?? '';
+            staffName = staffByEmail.name || staffName;
           }
         }
 
@@ -381,10 +409,10 @@ export default function StaffConsolePage({ params }: PageProps) {
         if (dbQueueId && dbQueueId === queueId) {
           setIsAuthorized(true);
           const profile = {
-            id: firebaseUser.uid,
-            name: staffName || firebaseUser.email || 'Staff Member',
-            email: firebaseUser.email || '',
-            queueId: dbQueueId
+            id: user.id,
+            name: staffName || user.email || 'Staff Member',
+            email: user.email || '',
+            queueId: dbQueueId,
           };
           useQueueStore.setState({ currentStaffProfile: profile });
           if (typeof window !== 'undefined') {
@@ -401,12 +429,12 @@ export default function StaffConsolePage({ params }: PageProps) {
       }
     });
 
-    return () => unsubscribe();
+    return () => { subscription.unsubscribe(); };
   }, [queueId, router]);
 
   const handleLogout = async () => {
     try {
-      await signOut(auth);
+      await supabase.auth.signOut();
       logoutStaff();
       router.push('/staff/login');
     } catch (err) {

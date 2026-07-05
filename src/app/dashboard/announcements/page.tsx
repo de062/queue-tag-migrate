@@ -15,8 +15,7 @@ import {
   CheckCircle,
   Globe
 } from 'lucide-react';
-import { collection, query, where, onSnapshot, doc } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { supabase } from '@/lib/supabase';
 import { Queue } from '@/types';
 import { 
   setAnnouncement, 
@@ -53,54 +52,63 @@ export default function AnnouncementsPage() {
       return;
     }
 
-    // 1. Direct real-time listener on queues
-    const q = query(
-      collection(db, 'queues'),
-      where('businessId', '==', user.uid)
-    );
-
-    const unsubscribeQueues = onSnapshot(q, (snapshot) => {
-      const list: Queue[] = [];
-      snapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        list.push({
-          id: docSnap.id,
-          locationId: data.businessId || data.locationId || '',
-          businessId: data.businessId || data.locationId || '',
-          name: data.name || '',
-          specialty: data.specialty || '',
-          status: data.status || 'live',
-          averageWaitTimeMin: data.averageWaitTimeMin || 15,
-          totalServedToday: data.totalServedToday || 0,
-          isAppointmentEnabled: data.isAppointmentEnabled || false,
-          isHalted: data.isHalted || false,
-          entries: data.entries || [],
-          currentToken: data.currentToken || 0,
-          waitingCount: data.waitingCount || 0,
-          workingHours: data.workingHours || '9:00 AM - 6:00 PM',
-          currentAnnouncement: data.currentAnnouncement || '',
-        } as Queue);
-      });
-      setQueuesList(list);
-      setIsSyncing(false);
-    }, (err) => {
-      console.error('Error listening to queues:', err);
-    });
-
-    // 2. Direct real-time listener on business document (for Global Announcement)
-    const bizRef = doc(db, 'businesses', user.uid);
-    const unsubscribeBusiness = onSnapshot(bizRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setGlobalAnnouncementText(data?.globalAnnouncement || '');
+    const fetchQueues = async () => {
+      const { data } = await supabase
+        .from('queues')
+        .select('*')
+        .eq('business_id', user.id);
+      if (data) {
+        setQueuesList(
+          data.map((row) => ({
+            id: row.id,
+            locationId: row.business_id || '',
+            businessId: row.business_id || '',
+            name: row.name || '',
+            specialty: row.specialty || '',
+            status: row.status || 'live',
+            averageWaitTimeMin: row.average_wait_time_min || 15,
+            totalServedToday: row.total_served_today || 0,
+            isAppointmentEnabled: row.is_appointment_enabled || false,
+            isHalted: row.is_halted || false,
+            entries: row.entries || [],
+            currentToken: row.current_token || 0,
+            waitingCount: row.waiting_count || 0,
+            workingHours: row.working_hours || '9:00 AM - 6:00 PM',
+            currentAnnouncement: row.current_announcement || '',
+          } as Queue))
+        );
       }
-    }, (err) => {
-      console.error('Error listening to business details:', err);
-    });
+      setIsSyncing(false);
+    };
+    fetchQueues();
+
+    const fetchBiz = async () => {
+      const { data } = await supabase
+        .from('businesses')
+        .select('global_announcement')
+        .eq('id', user.id)
+        .single();
+      if (data) {
+        setGlobalAnnouncementText(data.global_announcement || '');
+      }
+    };
+    fetchBiz();
+
+    const queuesChannel = supabase
+      .channel(`announcements-queues:${user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'queues',
+          filter: `business_id=eq.${user.id}` }, fetchQueues)
+      .subscribe();
+
+    const bizChannel = supabase
+      .channel(`announcements-biz:${user.id}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'businesses',
+          filter: `id=eq.${user.id}` }, fetchBiz)
+      .subscribe();
 
     return () => {
-      unsubscribeQueues();
-      unsubscribeBusiness();
+      supabase.removeChannel(queuesChannel);
+      supabase.removeChannel(bizChannel);
     };
   }, [user, isAuthLoading, router]);
 
@@ -124,7 +132,7 @@ export default function AnnouncementsPage() {
     setSuccessMsg(null);
 
     try {
-      await setGlobalAnnouncement(user.uid, globalMessage.trim());
+      await setGlobalAnnouncement(user.id, globalMessage.trim());
       setSuccessMsg('Successfully broadcasted Global Business Announcement!');
       setGlobalMessage('');
       
@@ -147,7 +155,7 @@ export default function AnnouncementsPage() {
     setSuccessMsg(null);
 
     try {
-      await clearGlobalAnnouncement(user.uid);
+      await clearGlobalAnnouncement(user.id);
       setSuccessMsg('Global Business Announcement cleared.');
       
       setTimeout(() => {

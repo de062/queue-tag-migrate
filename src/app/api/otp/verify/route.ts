@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/firebase';
-import { doc, getDoc, deleteDoc } from 'firebase/firestore';
+import { supabaseAdmin } from '@/lib/supabase-server';
 
 export async function POST(request: NextRequest) {
   try {
@@ -10,27 +9,32 @@ export async function POST(request: NextRequest) {
     }
 
     const cleanPhone = phone.replace(/\D/g, '');
-    try {
-      const otpRef = doc(db, 'otps', cleanPhone);
-      const docSnap = await getDoc(otpRef);
 
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        if (Date.now() > data.expiresAt) {
-          await deleteDoc(otpRef);
-          return NextResponse.json({ error: 'OTP has expired. Please request a new one.' }, { status: 400 });
-        }
-        if (data.code === code.trim()) {
-          await deleteDoc(otpRef);
+    try {
+      const { data } = await supabaseAdmin
+        .from('otp_verifications')
+        .select('*')
+        .eq('phone_number', cleanPhone)
+        .gt('expires_at', new Date().toISOString())
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (data) {
+        if (data.code_hash === code.trim()) {
+          await supabaseAdmin
+            .from('otp_verifications')
+            .update({ verified_at: new Date().toISOString() })
+            .eq('id', data.id);
           return NextResponse.json({ success: true });
         }
       }
     } catch (dbErr) {
-      console.error('Firestore check failed, falling back to simulated verification:', dbErr);
+      console.error('Database check failed, falling back to simulated verification:', dbErr);
     }
 
-    // Fallback or dev test code check: in dev mode or if code is '123456' or matches simulated
-    if (code.trim() === '123456' || !process.env.SMS_API_KEY) {
+    // Fallback dev test code or console mode
+    if (code.trim() === '123456' || !process.env.SMS_API_KEY || process.env.SMS_PROVIDER === 'console') {
       return NextResponse.json({ success: true, simulated: true });
     }
 

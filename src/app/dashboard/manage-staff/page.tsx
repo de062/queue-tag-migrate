@@ -51,16 +51,16 @@ export default function ManageStaffPage() {
       return;
     }
 
-    console.log(`STEP 1: Manage Staff Page Mounted, requesting sync for ${user.uid}`);
-    const unsubscribeLiveSync = initLiveSync(user.uid);
+    console.log(`STEP 1: Manage Staff Page Mounted, requesting sync for ${user.id}`);
+    const unsubscribeLiveSync = initLiveSync(user.id);
 
     // Subscribe to staff invites
-    const unsubscribeInvites = subscribeToStaffInvites(user.uid, (invites) => {
+    const unsubscribeInvites = subscribeToStaffInvites(user.id, (invites) => {
       setPendingInvites(invites);
     });
 
     // Subscribe to active staff profiles
-    const unsubscribeProfiles = subscribeToStaffProfiles(user.uid, (profiles) => {
+    const unsubscribeProfiles = subscribeToStaffProfiles(user.id, (profiles) => {
       setActiveStaff(profiles);
     });
 
@@ -80,7 +80,7 @@ export default function ManageStaffPage() {
   };
 
   const businessDisplayName = authBusinessName || location.name;
-  const currentBusinessId = user?.uid || location.id;
+  const currentBusinessId = user?.id || location.id;
   
   // Filter queues to only show queues for this location/business
   const displayQueuesList = Object.values(queues).filter(q => q.locationId === currentBusinessId);
@@ -107,7 +107,7 @@ export default function ManageStaffPage() {
     setCopied(false);
 
     try {
-      const token = await createStaffInvite(staffEmail, staffQueueId, user.uid);
+      const token = await createStaffInvite(staffEmail, staffQueueId, user.id);
       const host = typeof window !== 'undefined' ? window.location.origin : '';
       const inviteUrl = `${host}/staff/invite/${token}`;
       setGeneratedLink(inviteUrl);

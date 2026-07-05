@@ -1,13 +1,4 @@
-import { db } from '../lib/firebase';
-import { 
-  collection, 
-  query, 
-  where, 
-  onSnapshot, 
-  doc, 
-  addDoc, 
-  deleteDoc 
-} from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 import { StaffProfile } from '../types';
 
 export interface StaffInvite {
@@ -20,88 +11,119 @@ export interface StaffInvite {
 }
 
 /**
- * Creates a staff invite in Firestore staffInvites collection
+ * Creates a staff invite in the staff_invites table.
  */
-export async function createStaffInvite(email: string, queueId: string, businessId: string): Promise<string> {
+export async function createStaffInvite(
+  email: string,
+  queueId: string,
+  businessId: string
+): Promise<string> {
   const token = crypto.randomUUID();
-  const inviteData = {
+  const { error } = await supabase.from('staff_invites').insert({
     token,
     email: email.trim().toLowerCase(),
-    assignedQueueId: queueId,
-    businessId,
-    createdAt: new Date().toISOString()
-  };
-  
-  const collectionRef = collection(db, 'staffInvites');
-  await addDoc(collectionRef, inviteData);
+    assigned_queue_id: queueId,
+    business_id: businessId,
+  });
+  if (error) throw error;
   return token;
 }
 
 /**
- * Deletes a staff invite from Firestore staffInvites collection
+ * Deletes a staff invite from the staff_invites table.
  */
 export async function deleteStaffInvite(inviteId: string): Promise<void> {
-  const inviteDocRef = doc(db, 'staffInvites', inviteId);
-  await deleteDoc(inviteDocRef);
+  const { error } = await supabase.from('staff_invites').delete().eq('id', inviteId);
+  if (error) throw error;
 }
 
 /**
- * Subscribes to pending invites for a specific businessId in real-time
+ * Subscribes to pending invites for a specific businessId in real-time.
  */
-export function subscribeToStaffInvites(businessId: string, callback: (invites: StaffInvite[]) => void) {
+export function subscribeToStaffInvites(
+  businessId: string,
+  callback: (invites: StaffInvite[]) => void
+) {
   if (!businessId) {
     callback([]);
     return () => {};
   }
 
-  const q = query(collection(db, 'staffInvites'), where('businessId', '==', businessId));
-  
-  const unsubscribe = onSnapshot(q, (snapshot) => {
-    const invitesList: StaffInvite[] = [];
-    snapshot.forEach((docSnap) => {
-      const data = docSnap.data();
-      invitesList.push({
-        id: docSnap.id,
-        token: data.token || '',
-        email: data.email || '',
-        assignedQueueId: data.assignedQueueId || '',
-        businessId: data.businessId || '',
-        createdAt: data.createdAt || ''
-      });
-    });
-    
-    // Sort by newest first
-    invitesList.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const fetchInvites = async () => {
+    const { data, error } = await supabase
+      .from('staff_invites')
+      .select('*')
+      .eq('business_id', businessId)
+      .order('created_at', { ascending: false });
+
+    if (error) { console.error('Error fetching staff invites:', error); return; }
+
+    const invitesList: StaffInvite[] = (data ?? []).map((row) => ({
+      id: row.id,
+      token: row.token,
+      email: row.email,
+      assignedQueueId: row.assigned_queue_id ?? '',
+      businessId: row.business_id,
+      createdAt: row.created_at,
+    }));
+
     callback(invitesList);
-  });
+  };
 
-  return unsubscribe;
+  fetchInvites();
+
+  const channel = supabase
+    .channel(`staff_invites:${businessId}`)
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'staff_invites', filter: `business_id=eq.${businessId}` },
+      fetchInvites
+    )
+    .subscribe();
+
+  return () => { supabase.removeChannel(channel); };
 }
 
 /**
- * Subscribes to registered staff profiles for a specific businessId in real-time
+ * Subscribes to registered staff profiles for a specific businessId in real-time.
  */
-export function subscribeToStaffProfiles(businessId: string, callback: (profiles: StaffProfile[]) => void) {
+export function subscribeToStaffProfiles(
+  businessId: string,
+  callback: (profiles: StaffProfile[]) => void
+) {
   if (!businessId) {
     callback([]);
     return () => {};
   }
 
-  const q = query(collection(db, 'staff'), where('businessId', '==', businessId));
-  
-  const unsubscribe = onSnapshot(q, (snapshot) => {
-    const profilesList: StaffProfile[] = [];
-    snapshot.forEach((docSnap) => {
-      const data = docSnap.data();
-      profilesList.push({
-        id: docSnap.id,
-        name: data.name || '',
-        email: data.email || '',
-        queueId: data.assignedQueueId || data.queueId || ''
-      });
-    });
-    callback(profilesList);
-  });
+  const fetchProfiles = async () => {
+    const { data, error } = await supabase
+      .from('staff')
+      .select('*, staff_queue_assignments(queue_id)')
+      .eq('business_id', businessId);
 
-  return unsubscribe;
+    if (error) { console.error('Error fetching staff profiles:', error); return; }
+
+    const profilesList: StaffProfile[] = (data ?? []).map((row) => ({
+      id: row.id,
+      name: row.name ?? '',
+      email: row.email ?? '',
+      queueId: row.staff_queue_assignments?.[0]?.queue_id ?? '',
+    }));
+
+    callback(profilesList);
+  };
+
+  fetchProfiles();
+
+  const channel = supabase
+    .channel(`staff:${businessId}`)
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'staff', filter: `business_id=eq.${businessId}` },
+      fetchProfiles
+    )
+    .subscribe();
+
+  return () => { supabase.removeChannel(channel); };
 }

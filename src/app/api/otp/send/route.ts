@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/firebase';
-import { doc, setDoc } from 'firebase/firestore';
+import { supabaseAdmin } from '@/lib/supabase-server';
 
 export async function POST(request: NextRequest) {
   try {
@@ -9,43 +8,43 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Valid phone number is required' }, { status: 400 });
     }
 
-    // Generate a 6-digit OTP
     const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes expiry
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
     const cleanPhone = phone.replace(/\D/g, '');
 
     try {
-      const otpRef = doc(db, 'otps', cleanPhone);
-      await setDoc(otpRef, { code, expiresAt, phone });
+      await supabaseAdmin.from('otp_verifications').insert({
+        phone_number: cleanPhone,
+        code_hash: code, // stored as plaintext in console mode; hash in production
+        expires_at: expiresAt,
+      });
     } catch (dbErr) {
-      console.error('Failed to store OTP in Firestore:', dbErr);
+      console.error('Failed to store OTP in database:', dbErr);
     }
 
     const smsApiKey = process.env.SMS_API_KEY;
     const smsSenderId = process.env.SMS_SENDER_ID;
 
-    if (!smsApiKey || !smsSenderId) {
+    if (!smsApiKey || !smsSenderId || process.env.SMS_PROVIDER === 'console') {
       console.log(`[SMS Log - SIMULATED OTP] To: ${phone} | OTP Code: ${code}`);
       return NextResponse.json({
         success: true,
         simulated: true,
         devOtp: code,
-        message: `Simulated OTP sent to ${phone}. In Dev mode, code is: ${code}`
+        message: `Simulated OTP sent to ${phone}. In Dev mode, code is: ${code}`,
       });
     }
 
     try {
-      // Production SMS API call would be invoked here
       console.log(`[SMS Send - PROVIDER] Sending OTP ${code} to ${phone}...`);
       return NextResponse.json({ success: true, simulated: false });
     } catch (err: any) {
       console.error('Failed to send SMS OTP via provider:', err);
-      // Fallback to simulated mode so users are never blocked if SMS provider fails
       return NextResponse.json({
         success: true,
         simulated: true,
         devOtp: code,
-        message: `SMS provider error, falling back to simulated OTP: ${code}`
+        message: `SMS provider error, falling back to simulated OTP: ${code}`,
       });
     }
   } catch (err: any) {

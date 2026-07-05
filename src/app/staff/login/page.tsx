@@ -5,9 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useQueueStore } from '@/store/queueStore';
 import { Mail, Lock, LogIn, Users, AlertCircle, ArrowLeft, Loader2 } from 'lucide-react';
 import Link from 'next/link';
-import { signInWithEmailAndPassword, onAuthStateChanged } from 'firebase/auth';
-import { auth, db } from '@/lib/firebase';
-import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { supabase } from '@/lib/supabase';
 
 export default function StaffLoginPage() {
   const router = useRouter();
@@ -18,40 +16,42 @@ export default function StaffLoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  // If already logged in in Firebase, fetch profile and redirect directly to their queue console
+  // If already signed in via Supabase, fetch profile and redirect directly
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (firebaseUser) {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (session?.user) {
+        const user = session.user;
         try {
-          const staffDocRef = doc(db, 'staff', firebaseUser.uid);
-          const staffDocSnap = await getDoc(staffDocRef);
+          const { data: staffRow } = await supabase
+            .from('staff')
+            .select('*, staff_queue_assignments(queue_id)')
+            .eq('user_id', user.id)
+            .maybeSingle();
 
           let assignedQueueId = '';
-          let staffName = firebaseUser.displayName || '';
+          let staffName = user.user_metadata?.full_name || '';
 
-          if (staffDocSnap.exists()) {
-            const data = staffDocSnap.data();
-            assignedQueueId = data.assignedQueueId || data.queueId || '';
-            staffName = data.name || data.displayName || staffName;
+          if (staffRow) {
+            assignedQueueId = staffRow.staff_queue_assignments?.[0]?.queue_id ?? '';
+            staffName = staffRow.name || staffName;
           } else {
-            const staffQuery = query(
-              collection(db, 'staff'),
-              where('email', '==', firebaseUser.email?.toLowerCase())
-            );
-            const querySnap = await getDocs(staffQuery);
-            if (!querySnap.empty) {
-              const data = querySnap.docs[0].data();
-              assignedQueueId = data.assignedQueueId || data.queueId || '';
-              staffName = data.name || data.displayName || staffName;
+            const { data: staffByEmail } = await supabase
+              .from('staff')
+              .select('*, staff_queue_assignments(queue_id)')
+              .eq('email', user.email?.toLowerCase() ?? '')
+              .maybeSingle();
+            if (staffByEmail) {
+              assignedQueueId = staffByEmail.staff_queue_assignments?.[0]?.queue_id ?? '';
+              staffName = staffByEmail.name || staffName;
             }
           }
 
           if (assignedQueueId) {
             const profile = {
-              id: firebaseUser.uid,
-              name: staffName || firebaseUser.email || 'Staff Member',
-              email: firebaseUser.email || '',
-              queueId: assignedQueueId
+              id: user.id,
+              name: staffName || user.email || 'Staff Member',
+              email: user.email || '',
+              queueId: assignedQueueId,
             };
             useQueueStore.setState({ currentStaffProfile: profile });
             if (typeof window !== 'undefined') {
@@ -65,7 +65,7 @@ export default function StaffLoginPage() {
       }
     });
 
-    return () => unsubscribe();
+    return () => { subscription.unsubscribe(); };
   }, [router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -80,30 +80,35 @@ export default function StaffLoginPage() {
     }
 
     try {
-      const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
-      const firebaseUser = userCredential.user;
+      const { data: authData, error: signInError } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      if (signInError) throw signInError;
+      const user = authData.user;
 
-      // Fetch the staff member's document from the Firestore "staff" collection
-      const staffDocRef = doc(db, 'staff', firebaseUser.uid);
-      const staffDocSnap = await getDoc(staffDocRef);
-
+      // Fetch the staff member's record from 'staff' table
       let assignedQueueId = '';
-      let staffName = firebaseUser.displayName || '';
+      let staffName = user.user_metadata?.full_name || '';
 
-      if (staffDocSnap.exists()) {
-        const data = staffDocSnap.data();
-        assignedQueueId = data.assignedQueueId || data.queueId || '';
-        staffName = data.name || data.displayName || staffName;
+      const { data: staffRow } = await supabase
+        .from('staff')
+        .select('*, staff_queue_assignments(queue_id)')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      if (staffRow) {
+        assignedQueueId = staffRow.staff_queue_assignments?.[0]?.queue_id ?? '';
+        staffName = staffRow.name || staffName;
       } else {
-        const staffQuery = query(
-          collection(db, 'staff'),
-          where('email', '==', email.trim().toLowerCase())
-        );
-        const querySnap = await getDocs(staffQuery);
-        if (!querySnap.empty) {
-          const data = querySnap.docs[0].data();
-          assignedQueueId = data.assignedQueueId || data.queueId || '';
-          staffName = data.name || data.displayName || staffName;
+        const { data: staffByEmail } = await supabase
+          .from('staff')
+          .select('*, staff_queue_assignments(queue_id)')
+          .eq('email', email.trim().toLowerCase())
+          .maybeSingle();
+        if (staffByEmail) {
+          assignedQueueId = staffByEmail.staff_queue_assignments?.[0]?.queue_id ?? '';
+          staffName = staffByEmail.name || staffName;
         }
       }
 
@@ -112,13 +117,12 @@ export default function StaffLoginPage() {
       }
 
       const profile = {
-        id: firebaseUser.uid,
-        name: staffName || firebaseUser.email || 'Staff Member',
-        email: firebaseUser.email || email.trim(),
-        queueId: assignedQueueId
+        id: user.id,
+        name: staffName || user.email || 'Staff Member',
+        email: user.email || email.trim(),
+        queueId: assignedQueueId,
       };
 
-      // Set to Zustand store & local storage
       useQueueStore.setState({ currentStaffProfile: profile });
       if (typeof window !== 'undefined') {
         localStorage.setItem('qt_staff_profile', JSON.stringify(profile));
@@ -127,7 +131,7 @@ export default function StaffLoginPage() {
       router.push(`/staff/${assignedQueueId}`);
     } catch (err: any) {
       console.error('Staff Login Error:', err);
-      if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
+      if (err.message?.includes('Invalid login credentials') || err.message?.includes('invalid_credentials')) {
         setError('Invalid email or password. Please try again.');
       } else {
         setError(err.message || 'An unexpected error occurred during login.');

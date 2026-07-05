@@ -97,80 +97,68 @@ export default function CustomerPortal({ params }: PageProps) {
     
     console.log(`STEP 1: CustomerPortal Sync Mounted for ${locationId}`);
     const unsubscribe = initLiveSync(locationId);
-    
-    let unsubscribeBusiness: (() => void) | undefined;
+    let businessChannel: any;
     
     // Subscribe to business details (for global announcement and business name) in real-time
     const subscribeBusiness = async () => {
-      try {
-        const { doc, onSnapshot } = await import('firebase/firestore');
-        const { db } = await import('@/lib/firebase');
-        const docRef = doc(db, 'businesses', locationId);
-        
-        unsubscribeBusiness = onSnapshot(docRef, (docSnap) => {
-          if (docSnap.exists()) {
-            setBusinessExists(true);
-            const data = docSnap.data();
-            setGlobalAnnouncementText(data?.globalAnnouncement || '');
-            setBusinessName(data?.businessName || '');
-            setLogoUrl(data?.logoUrl || '');
-            setPrimaryColor(data?.primaryColor || '#2563eb');
-            setRequirePhoneNumber(data?.requirePhoneNumber || false);
-            setBusinessAddress(data?.address || '');
-            setPublicPhone(data?.publicPhone || '');
-            setPublicEmail(data?.publicEmail || '');
-            setBusinessServices(data?.services || []);
-            if (data?.businessName) {
-              // Update locations in store if needed
-              useQueueStore.setState((state) => ({
-                locations: {
-                  ...state.locations,
-                  [locationId]: {
-                    ...(state.locations[locationId] || { id: locationId, type: 'Clinic' }),
-                    name: data.businessName
-                  }
-                }
-              }));
-            }
-          } else {
-            // Check if there are queues anyway (for demo fallback)
-            const verifyQueues = async () => {
-              try {
-                const { collection, query, where, getDocs } = await import('firebase/firestore');
-                const q = query(collection(db, 'queues'), where('businessId', '==', locationId));
-                const querySnap = await getDocs(q);
-                if (!querySnap.empty) {
-                  setBusinessExists(true);
-                } else {
-                  setBusinessExists(false);
-                }
-              } catch (e) {
-                setBusinessExists(false);
-              } finally {
-                setIsLoading(false);
-              }
-            };
-            verifyQueues();
+      const { supabase } = await import('@/lib/supabase');
+
+      const fetchBiz = async () => {
+        const { data } = await supabase
+          .from('businesses')
+          .select('*')
+          .eq('id', locationId)
+          .maybeSingle();
+
+        if (data) {
+          setBusinessExists(true);
+          setGlobalAnnouncementText(data.global_announcement || '');
+          setBusinessName(data.name || '');
+          setLogoUrl(data.logo_url || '');
+          setPrimaryColor(data.primary_color || '#2563eb');
+          setRequirePhoneNumber(data.require_phone_number || false);
+          setBusinessAddress(data.address || '');
+          setPublicPhone(data.public_phone || '');
+          setPublicEmail(data.public_email || '');
+          setBusinessServices(data.services || []);
+          if (data.name) {
+            useQueueStore.setState((state) => ({
+              locations: {
+                ...state.locations,
+                [locationId]: {
+                  ...(state.locations[locationId] || { id: locationId, type: 'Clinic' }),
+                  name: data.name,
+                },
+              },
+            }));
           }
-          setIsLoading(false);
-        }, (err) => {
-          console.error('Failed to subscribe to business:', err);
-          setIsLoading(false);
-        });
-      } catch (err) {
-        console.error('Failed to set up business subscription:', err);
+        } else {
+          // Check if there are queues anyway (for demo fallback)
+          const { data: queuesData } = await supabase
+            .from('queues')
+            .select('id')
+            .eq('business_id', locationId)
+            .limit(1);
+          setBusinessExists((queuesData ?? []).length > 0);
+        }
         setIsLoading(false);
-      }
+      };
+
+      fetchBiz();
+
+      businessChannel = supabase
+        .channel(`biz-kiosk:${locationId}`)
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'businesses',
+            filter: `id=eq.${locationId}` }, fetchBiz)
+        .subscribe();
     };
 
     subscribeBusiness();
 
     return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
-      if (unsubscribeBusiness) {
-        unsubscribeBusiness();
+      if (unsubscribe) unsubscribe();
+      if (businessChannel) {
+        import('@/lib/supabase').then(({ supabase }) => supabase.removeChannel(businessChannel));
       }
     };
   }, [locationId, initLiveSync]);
@@ -182,48 +170,62 @@ export default function CustomerPortal({ params }: PageProps) {
       return;
     }
 
-    let unsubscribeQueue: (() => void) | undefined;
+    let queueChannel: any;
 
     const subscribeQueue = async () => {
-      try {
-        const { doc, onSnapshot } = await import('firebase/firestore');
-        const { db } = await import('@/lib/firebase');
-        const docRef = doc(db, 'queues', currentCustomerQueueId);
+      const { supabase } = await import('@/lib/supabase');
 
-        unsubscribeQueue = onSnapshot(docRef, (docSnap) => {
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            setTrackedQueueData({
-              id: docSnap.id,
-              locationId: data.businessId || data.locationId || '',
-              businessId: data.businessId || data.locationId || '',
-              name: data.name || '',
-              specialty: data.specialty || '',
-              status: data.status || 'live',
-              averageWaitTimeMin: data.averageWaitTimeMin || 15,
-              totalServedToday: data.totalServedToday || 0,
-              isAppointmentEnabled: data.isAppointmentEnabled || false,
-              isHalted: data.isHalted || false,
-              entries: data.entries || [],
-              currentToken: data.currentToken || 0,
-              waitingCount: data.waitingCount || 0,
-              workingHours: data.workingHours || '9:00 AM - 6:00 PM',
-              currentAnnouncement: data.currentAnnouncement || '',
-            } as Queue);
-          }
-        }, (err) => {
-          console.error('Error listening to tracked queue:', err);
-        });
-      } catch (err) {
-        console.error('Failed to set up queue subscription:', err);
-      }
+      const fetchQueue = async () => {
+        const { data } = await supabase
+          .from('queues')
+          .select('*, queue_entries(*)')
+          .eq('id', currentCustomerQueueId)
+          .single();
+        if (data) {
+          setTrackedQueueData({
+            id: data.id,
+            locationId: data.business_id,
+            businessId: data.business_id,
+            name: data.name ?? '',
+            specialty: data.specialty ?? '',
+            status: data.status === 'live' ? 'live' : 'paused',
+            averageWaitTimeMin: data.average_wait_time_min ?? 15,
+            totalServedToday: data.total_served_today ?? 0,
+            isAppointmentEnabled: data.is_appointment_enabled ?? false,
+            isHalted: data.is_halted ?? false,
+            entries: (data.queue_entries ?? [])
+              .filter((e: any) => ['waiting', 'next', 'serving'].includes(e.status))
+              .map((e: any) => ({
+                id: e.id, tokenNumber: e.token_number, customerName: e.customer_name,
+                phoneNumber: e.phone_number, joinedAt: e.joined_at, status: e.status,
+                isAppointment: e.is_appointment, appointmentId: e.appointment_id,
+              }))
+              .sort((a: any, b: any) => a.tokenNumber - b.tokenNumber),
+            currentToken: data.current_token ?? 0,
+            waitingCount: data.waiting_count ?? 0,
+            workingHours: data.working_hours ?? '9:00 AM - 6:00 PM',
+            currentAnnouncement: data.current_announcement ?? '',
+            lastCalledPatient: data.last_called_patient ?? undefined,
+          } as Queue);
+        }
+      };
+
+      fetchQueue();
+
+      queueChannel = supabase
+        .channel(`customer-queue:${currentCustomerQueueId}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'queues',
+            filter: `id=eq.${currentCustomerQueueId}` }, fetchQueue)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'queue_entries',
+            filter: `queue_id=eq.${currentCustomerQueueId}` }, fetchQueue)
+        .subscribe();
     };
 
     subscribeQueue();
 
     return () => {
-      if (unsubscribeQueue) {
-        unsubscribeQueue();
+      if (queueChannel) {
+        import('@/lib/supabase').then(({ supabase }) => supabase.removeChannel(queueChannel));
       }
     };
   }, [currentCustomerQueueId]);
@@ -282,27 +284,30 @@ export default function CustomerPortal({ params }: PageProps) {
     setIsCheckingVip(true);
     try {
       const todayStr = new Date().toISOString().split('T')[0];
-      const { collection, query, where, getDocs } = await import('firebase/firestore');
-      const { db } = await import('@/lib/firebase');
-      
-      const apptsRef = collection(db, 'appointments');
-      const q = query(
-        apptsRef,
-        where('workspaceId', '==', locationId),
-        where('customerPhone', '==', identityPhone.trim()),
-        where('date', '==', todayStr),
-        where('status', '==', 'scheduled')
-      );
+      const { supabase } = await import('@/lib/supabase');
 
-      const snap = await getDocs(q);
-      if (!snap.empty) {
-        const apptDoc = snap.docs[0];
-        const apptData = apptDoc.data();
+      const { data } = await supabase
+        .from('appointments')
+        .select('*')
+        .eq('workspace_id', locationId)
+        .eq('customer_phone', identityPhone.trim())
+        .eq('date', todayStr)
+        .eq('status', 'scheduled')
+        .limit(1)
+        .maybeSingle();
+
+      if (data) {
         setVipAppointment({
-          id: apptDoc.id,
-          ...apptData
+          id: data.id,
+          customerName: data.customer_name,
+          customerPhone: data.customer_phone,
+          date: data.date,
+          startTime: typeof data.start_time === 'string' ? data.start_time.slice(0, 5) : data.start_time,
+          endTime: typeof data.end_time === 'string' ? data.end_time.slice(0, 5) : data.end_time,
+          status: data.status,
+          workspaceId: data.workspace_id,
         });
-        setFullName(apptData.customerName || '');
+        setFullName(data.customer_name || '');
         setPhoneNumber(identityPhone.trim());
         setIsPhoneValid(true);
       } else {
@@ -328,10 +333,8 @@ export default function CustomerPortal({ params }: PageProps) {
     setIsSubmittingVip(true);
     try {
       // 1. Update appointment status to 'arrived'
-      const { doc, updateDoc } = await import('firebase/firestore');
-      const { db } = await import('@/lib/firebase');
-      const apptRef = doc(db, 'appointments', vipAppointment.id);
-      await updateDoc(apptRef, { status: 'arrived' });
+      const { supabase } = await import('@/lib/supabase');
+      await supabase.from('appointments').update({ status: 'arrived' }).eq('id', vipAppointment.id);
 
       // 2. Inject directly into live walk-ins queue matching the booked queueId
       const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });

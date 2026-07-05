@@ -36,7 +36,7 @@ export default function CustomersPage() {
     }
 
     // Subscribe to customers collection in real-time
-    const unsubscribe = subscribeToCustomers(user.uid, (data) => {
+    const unsubscribe = subscribeToCustomers(user.id, (data) => {
       setCustomers(data);
       setIsSyncing(false);
     });

@@ -1,5 +1,4 @@
-import { db } from '../lib/firebase';
-import { collection, addDoc } from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 
 export interface QueueEvent {
   id?: string;
@@ -10,17 +9,15 @@ export interface QueueEvent {
 }
 
 export async function logQueueEvent(
-  queueId: string, 
-  action: 'join' | 'call' | 'skip' | 'recall' | 'completed' | 'no-show' | 'return' | string, 
+  queueId: string,
+  action: 'join' | 'call' | 'skip' | 'recall' | 'completed' | 'no-show' | 'return' | string,
   patientId: string
 ): Promise<void> {
   try {
-    const eventRef = collection(db, 'queueEvents');
-    await addDoc(eventRef, {
-      queueId,
+    await supabase.from('queue_events').insert({
+      queue_id: queueId,
       action,
-      patientId,
-      timestamp: new Date().toISOString()
+      patient_id: patientId,
     });
   } catch (err) {
     console.error('Error logging queue event in logQueueEvent:', err);

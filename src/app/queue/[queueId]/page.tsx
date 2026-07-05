@@ -5,6 +5,7 @@ import { useQueueStore } from '@/store/queueStore';
 import { User, Clock, Users, ArrowLeft, Megaphone } from 'lucide-react';
 import Link from 'next/link';
 import { Queue } from '@/types';
+import { supabase } from '@/lib/supabase';
 
 interface PageProps {
   params: Promise<{ queueId: string }>;
@@ -28,59 +29,57 @@ export default function CustomerPublicQueuePage({ params }: PageProps) {
   // Real-time synchronization trigger specifically for this queueId
   useEffect(() => {
     setIsMounted(true);
-    
-    let unsubscribe: (() => void) | undefined;
-    
-    async function setupSync() {
+
+    const fetchQueue = async () => {
       try {
-        const { doc, onSnapshot } = await import('firebase/firestore');
-        const { db } = await import('@/lib/firebase');
-        const docRef = doc(db, 'queues', queueId);
-        
-        unsubscribe = onSnapshot(docRef, (docSnap) => {
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            const queueObj = {
-              id: docSnap.id,
-              locationId: data.businessId || data.locationId || '',
-              businessId: data.businessId || data.locationId || '',
-              name: data.name || '',
-              specialty: data.specialty || '',
-              role: data.role || '',
-              status: data.status || 'live',
-              averageWaitTimeMin: data.averageWaitTimeMin || 15,
-              totalServedToday: data.totalServedToday || 0,
-              isAppointmentEnabled: data.isAppointmentEnabled || false,
-              isHalted: data.isHalted || false,
-              entries: data.entries || [],
-              currentToken: data.currentToken || 0,
-              waitingCount: data.waitingCount || 0,
-              workingHours: data.workingHours || '9:00 AM - 6:00 PM',
-              currentAnnouncement: data.currentAnnouncement || '',
-            } as Queue;
-            
-            // Update the Zustand store's queues record
-            useQueueStore.setState((state) => ({
-              queues: {
-                ...state.queues,
-                [queueId]: queueObj
-              }
-            }));
-          }
-        }, (err) => {
-          console.error('Error onSnapshot for queueId:', err);
-        });
+        const { data, error } = await supabase
+          .from('queues')
+          .select('*')
+          .eq('id', queueId)
+          .maybeSingle();
+
+        if (error || !data) return;
+
+        const queueObj = {
+          id: data.id,
+          locationId: data.business_id || '',
+          businessId: data.business_id || '',
+          name: data.name || '',
+          specialty: data.specialty || '',
+          role: data.role || '',
+          status: data.status || 'live',
+          averageWaitTimeMin: data.average_wait_time_min || 15,
+          totalServedToday: data.total_served_today || 0,
+          isAppointmentEnabled: data.is_appointment_enabled || false,
+          isHalted: data.is_halted || false,
+          entries: data.entries || [],
+          currentToken: data.current_token || 0,
+          waitingCount: data.waiting_count || 0,
+          workingHours: data.working_hours || '9:00 AM - 6:00 PM',
+          currentAnnouncement: data.current_announcement || '',
+        } as Queue;
+
+        useQueueStore.setState((state) => ({
+          queues: {
+            ...state.queues,
+            [queueId]: queueObj,
+          },
+        }));
       } catch (err) {
-        console.error('Error setting up onSnapshot for queueId:', err);
+        console.error('Error fetching queueId:', err);
       }
-    }
-    
-    setupSync();
-    
+    };
+
+    fetchQueue();
+
+    const channel = supabase
+      .channel(`public-queue:${queueId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'queues',
+          filter: `id=eq.${queueId}` }, fetchQueue)
+      .subscribe();
+
     return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
+      supabase.removeChannel(channel);
     };
   }, [queueId]);
 
@@ -100,34 +99,34 @@ export default function CustomerPublicQueuePage({ params }: PageProps) {
   useEffect(() => {
     if (!queue?.businessId) return;
 
-    let unsubscribeBusiness: (() => void) | undefined;
-    
-    async function setupBusinessSync() {
+    const fetchBusiness = async () => {
       try {
-        const { doc, onSnapshot } = await import('firebase/firestore');
-        const { db } = await import('@/lib/firebase');
-        const docRef = doc(db, 'businesses', queue.businessId);
-        
-        unsubscribeBusiness = onSnapshot(docRef, (docSnap) => {
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            setBusinessName(data.businessName || '');
-            setLogoUrl(data.logoUrl || '');
-            setPrimaryColor(data.primaryColor || '#2563eb');
-            setRequirePhoneNumber(data.requirePhoneNumber || false);
-          }
-        });
+        const { data, error } = await supabase
+          .from('businesses')
+          .select('name, logo_url, primary_color, require_phone_number')
+          .eq('id', queue.businessId)
+          .maybeSingle();
+
+        if (error || !data) return;
+        setBusinessName(data.name || '');
+        setLogoUrl(data.logo_url || '');
+        setPrimaryColor(data.primary_color || '#2563eb');
+        setRequirePhoneNumber(data.require_phone_number || false);
       } catch (e) {
         console.error('Error syncing business settings:', e);
       }
-    }
+    };
 
-    setupBusinessSync();
+    fetchBusiness();
+
+    const channel = supabase
+      .channel(`public-queue-biz:${queue.businessId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'businesses',
+          filter: `id=eq.${queue.businessId}` }, fetchBusiness)
+      .subscribe();
 
     return () => {
-      if (unsubscribeBusiness) {
-        unsubscribeBusiness();
-      }
+      supabase.removeChannel(channel);
     };
   }, [queue?.businessId]);
 

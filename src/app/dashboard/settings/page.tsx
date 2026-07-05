@@ -30,8 +30,7 @@ import {
   Check
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { doc, onSnapshot, updateDoc, collection, query, where } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { supabase } from '@/lib/supabase';
 import { updateEnterpriseSettings, deleteWorkspace, updateAppointmentSettings } from '@/services/settingsService';
 import { QRCodeSVG } from 'qrcode.react';
 
@@ -121,76 +120,78 @@ export default function SettingsPage() {
     reader.readAsDataURL(file);
   };
 
-  // Firestore sync for settings
+  // Supabase sync for settings
   useEffect(() => {
     if (isAuthLoading) return;
+    if (!user) { router.push('/login'); return; }
 
-    if (!user) {
-      router.push('/login');
-      return;
-    }
+    const businessId = user.id;
 
-    const bizRef = doc(db, 'businesses', user.uid);
-    const unsubscribe = onSnapshot(bizRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setBusinessName(data.businessName || '');
-        setBusinessCategory(data.businessCategory || 'Other');
+    const fetchBiz = async () => {
+      const { data } = await supabase
+        .from('businesses')
+        .select('*')
+        .eq('id', businessId)
+        .single();
+
+      if (data) {
+        setBusinessName(data.name || '');
+        setBusinessCategory(data.business_category || 'Other');
         setBusinessAddress(data.address || '');
         setBusinessEmail(data.email || user.email || '');
-        setLogoUrl(data.logoUrl || '');
-        setPrimaryColor(data.primaryColor || '#2563eb');
-        setRequirePhone(data.requirePhoneNumber ?? false);
-        setEnableSMS(data.enableSmsAlerts ?? true);
-        setPublicPhone(data.publicPhone || '');
-        setPublicEmail(data.publicEmail || '');
-
-        // Fetch appointments settings
-        setAppointmentsEnabled(data.appointmentsEnabled ?? false);
-        setOperatingHours(data.operatingHours || defaultOperatingHours);
+        setLogoUrl(data.logo_url || '');
+        setPrimaryColor(data.primary_color || '#2563eb');
+        setRequirePhone(data.require_phone_number ?? false);
+        setEnableSMS(data.enable_sms_alerts ?? true);
+        setPublicPhone(data.public_phone || '');
+        setPublicEmail(data.public_email || '');
+        setAppointmentsEnabled(data.appointments_enabled ?? false);
+        setOperatingHours(data.operating_hours || defaultOperatingHours);
         setServices(data.services || []);
 
-        // Retrieve or generate bookingSlug
-        let currentSlug = data.bookingSlug;
+        let currentSlug = data.booking_slug;
         if (!currentSlug) {
-          const baseSlug = (data.businessName || 'booking')
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, '-')
-            .replace(/(^-|-$)/g, '');
+          const baseSlug = (data.name || 'booking')
+            .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
           currentSlug = `${baseSlug || 'booking'}-${Math.random().toString(36).substring(2, 7)}`;
-          updateDoc(bizRef, { bookingSlug: currentSlug }).catch((err: any) => {
-            console.error('Error auto-saving booking slug:', err);
-          });
+          supabase.from('businesses').update({ booking_slug: currentSlug }).eq('id', businessId)
+            .then(({ error }) => { if (error) console.error('Error auto-saving booking slug:', error); });
         }
         setBookingSlug(currentSlug);
       }
-    }, (err) => {
-      console.error('Error listening to business details:', err);
-    });
+    };
 
-    return () => unsubscribe();
+    fetchBiz();
+
+    const bizChannel = supabase
+      .channel(`settings-biz:${businessId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'businesses',
+          filter: `id=eq.${businessId}` }, fetchBiz)
+      .subscribe();
+
+    return () => { supabase.removeChannel(bizChannel); };
   }, [user, isAuthLoading, router]);
 
   // Subscribe to queues of this business for selection
   useEffect(() => {
     if (isAuthLoading || !user) return;
 
-    const queuesRef = collection(db, 'queues');
-    const q = query(queuesRef, where('businessId', '==', user.uid));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const list: any[] = [];
-      snapshot.forEach((doc) => {
-        list.push({
-          id: doc.id,
-          ...doc.data()
-        });
-      });
-      setAvailableQueues(list);
-    }, (err) => {
-      console.error('Error fetching queues for appointment settings dropdown:', err);
-    });
+    const fetchQueues = async () => {
+      const { data } = await supabase
+        .from('queues')
+        .select('id, name, specialty')
+        .eq('business_id', user.id);
+      setAvailableQueues(data ?? []);
+    };
+    fetchQueues();
 
-    return () => unsubscribe();
+    const channel = supabase
+      .channel(`settings-queues:${user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'queues',
+          filter: `business_id=eq.${user.id}` }, fetchQueues)
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [user, isAuthLoading]);
 
   const handleSaveProfile = async (e: React.FormEvent) => {
@@ -244,9 +245,7 @@ export default function SettingsPage() {
     const nextVal = !requirePhone;
     setRequirePhone(nextVal);
     try {
-      const bizRef = doc(db, 'businesses', user.uid);
-      const { updateDoc } = await import('firebase/firestore');
-      await updateDoc(bizRef, { requirePhoneNumber: nextVal });
+      await supabase.from('businesses').update({ require_phone_number: nextVal }).eq('id', user.id);
     } catch (err) {
       console.error('Failed to update requirePhoneNumber preference:', err);
     }
@@ -257,9 +256,7 @@ export default function SettingsPage() {
     const nextVal = !enableSMS;
     setEnableSMS(nextVal);
     try {
-      const bizRef = doc(db, 'businesses', user.uid);
-      const { updateDoc } = await import('firebase/firestore');
-      await updateDoc(bizRef, { enableSmsAlerts: nextVal });
+      await supabase.from('businesses').update({ enable_sms_alerts: nextVal }).eq('id', user.id);
     } catch (err) {
       console.error('Failed to update enableSmsAlerts preference:', err);
     }
@@ -271,9 +268,7 @@ export default function SettingsPage() {
     const nextVal = !appointmentsEnabled;
     setAppointmentsEnabled(nextVal);
     try {
-      const bizRef = doc(db, 'businesses', user.uid);
-      const { updateDoc } = await import('firebase/firestore');
-      await updateDoc(bizRef, { appointmentsEnabled: nextVal });
+      await supabase.from('businesses').update({ appointments_enabled: nextVal }).eq('id', user.id);
     } catch (err) {
       console.error('Failed to update appointmentsEnabled preference:', err);
       alert('Failed to update appointment settings. Reverting to previous state.');

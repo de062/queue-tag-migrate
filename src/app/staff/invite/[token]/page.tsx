@@ -16,9 +16,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import Link from 'next/link';
-import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
-import { auth, db } from '@/lib/firebase';
-import { collection, query, where, getDocs, doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
+import { supabase } from '@/lib/supabase';
 
 interface PageProps {
   params: Promise<{ token: string }>;
@@ -52,33 +50,31 @@ export default function StaffOnboardingPage({ params }: PageProps) {
   useEffect(() => {
     async function validateToken() {
       try {
-        const q = query(collection(db, 'staffInvites'), where('token', '==', token));
-        const querySnap = await getDocs(q);
-        
-        if (querySnap.empty) {
+        const { data: inviteRow, error } = await supabase
+          .from('staff_invites')
+          .select('*')
+          .eq('token', token)
+          .maybeSingle();
+
+        if (error || !inviteRow) {
           setInvite(null);
           setIsValidating(false);
           return;
         }
 
-        const docSnap = querySnap.docs[0];
-        const data = docSnap.data();
         const details: InviteDetails = {
-          id: docSnap.id,
-          email: data.email || '',
-          assignedQueueId: data.assignedQueueId || '',
-          businessId: data.businessId || ''
+          id: inviteRow.id,
+          email: inviteRow.email || '',
+          assignedQueueId: inviteRow.assigned_queue_id || '',
+          businessId: inviteRow.business_id || '',
         };
-
         setInvite(details);
 
         // Fetch queue name
         if (details.assignedQueueId) {
-          const queueDocRef = doc(db, 'queues', details.assignedQueueId);
-          const queueDocSnap = await getDoc(queueDocRef);
-          if (queueDocSnap.exists()) {
-            setQueueName(queueDocSnap.data().name || 'Assigned Queue');
-          }
+          const { data: qRow } = await supabase
+            .from('queues').select('name').eq('id', details.assignedQueueId).single();
+          if (qRow?.name) setQueueName(qRow.name);
         }
       } catch (err) {
         console.error('Error validating onboarding token:', err);
@@ -116,46 +112,58 @@ export default function StaffOnboardingPage({ params }: PageProps) {
     setIsSubmitting(true);
 
     try {
-      // 1. Create Firebase Auth user
-      const userCredential = await createUserWithEmailAndPassword(auth, invite.email, password);
-      const user = userCredential.user;
+      // 1. Create Supabase Auth user
+      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+        email: invite.email,
+        password,
+        options: { data: { full_name: staffName.trim() } },
+      });
+      if (signUpError) throw signUpError;
+      const user = signUpData.user!;
 
-      // 2. Set user display name in Auth
-      await updateProfile(user, { displayName: staffName.trim() });
-
-      // 3. Create staff profile document in Firestore staff collection
-      await setDoc(doc(db, 'staff', user.uid), {
-        id: user.uid,
+      // 2. Create staff row in 'staff' table
+      await supabase.from('staff').insert({
+        user_id: user.id,
+        business_id: invite.businessId,
         name: staffName.trim(),
         email: invite.email,
-        assignedQueueId: invite.assignedQueueId,
-        queueId: invite.assignedQueueId,
-        businessId: invite.businessId,
-        createdAt: new Date().toISOString()
+        status: 'active',
       });
 
-      // 4. Update Zustand state & localStorage for console session initialization
+      // 3. Link staff to assigned queue via staff_queue_assignments
+      if (invite.assignedQueueId) {
+        // Get the staff row id
+        const { data: staffRow } = await supabase
+          .from('staff').select('id').eq('user_id', user.id).single();
+        if (staffRow) {
+          await supabase.from('staff_queue_assignments').insert({
+            staff_id: staffRow.id,
+            queue_id: invite.assignedQueueId,
+          });
+        }
+      }
+
+      // 4. Update Zustand state & localStorage
       const profile = {
-        id: user.uid,
+        id: user.id,
         name: staffName.trim(),
         email: invite.email,
-        queueId: invite.assignedQueueId
+        queueId: invite.assignedQueueId,
       };
-      
       useQueueStore.setState({ currentStaffProfile: profile });
       if (typeof window !== 'undefined') {
         localStorage.setItem('qt_staff_profile', JSON.stringify(profile));
       }
 
-      // 5. Delete invite token from Firestore
-      await deleteDoc(doc(db, 'staffInvites', invite.id));
+      // 5. Delete invite token
+      await supabase.from('staff_invites').delete().eq('id', invite.id);
 
       // 6. Redirect to the assigned queue console
       router.push(`/staff/${invite.assignedQueueId}`);
     } catch (err: any) {
       console.error('Error during staff onboarding:', err);
-      if (err.code === 'auth/email-already-in-use') {
-        setError('This email address is already registered in Firebase Authentication. Please contact your admin.');
+      if (err.message?.includes('already registered') || err.message?.includes('already been registered')) {
+        setError('This email address is already registered. Please contact your admin.');
       } else {
         setError(err.message || 'An unexpected error occurred during onboarding.');
       }

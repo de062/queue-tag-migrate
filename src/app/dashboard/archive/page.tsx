@@ -44,7 +44,7 @@ export default function DailyArchivePage() {
       return;
     }
 
-    const unsubscribe = subscribeToCustomers(user.uid, (data) => {
+    const unsubscribe = subscribeToCustomers(user.id, (data) => {
       setCustomers(data);
       setIsSyncing(false);
     });

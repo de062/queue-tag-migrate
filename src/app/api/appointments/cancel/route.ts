@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/firebase';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { supabaseAdmin } from '@/lib/supabase-server';
 import { sendCancellationNotice } from '@/lib/notifications';
 
 export async function POST(request: NextRequest) {
@@ -10,16 +9,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Missing appointmentId' }, { status: 400 });
     }
 
-    const apptRef = doc(db, 'appointments', appointmentId);
-    const apptSnap = await getDoc(apptRef);
-    if (!apptSnap.exists()) {
+    const { data: apptData, error: fetchErr } = await supabaseAdmin
+      .from('appointments')
+      .select('*')
+      .eq('id', appointmentId)
+      .single();
+
+    if (fetchErr || !apptData) {
       return NextResponse.json({ error: 'Appointment not found' }, { status: 404 });
     }
 
-    const apptData = apptSnap.data();
-    
-    // 1. Eliminate IDOR: Enforce that the appointment must have already been marked 'cancelled'
-    // in Firestore by an authorized staff member or admin via client SDK (guarded by Firestore Security Rules).
+    // 1. Eliminate IDOR: must already be marked 'cancelled' by authorized staff via client
     if (apptData.status !== 'cancelled') {
       return NextResponse.json(
         { error: 'Forbidden: Appointment status must be marked cancelled by authorized staff before dispatching notification' },
@@ -27,8 +27,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 2. SMS Flood Protection: Check if notice was already sent
-    if (apptData.cancellationSmsSent) {
+    // 2. SMS Flood Protection
+    if (apptData.cancellation_sms_sent) {
       return NextResponse.json(
         { error: 'Cancellation notice already dispatched for this appointment' },
         { status: 400 }
@@ -36,14 +36,14 @@ export async function POST(request: NextRequest) {
     }
 
     // Send cancellation SMS if phone number is present
-    if (apptData.customerPhone) {
+    if (apptData.customer_phone) {
       try {
         await sendCancellationNotice(
-          apptData.customerPhone,
-          apptData.customerName || 'Customer',
+          apptData.customer_phone,
+          apptData.customer_name || 'Customer',
           apptData.date || '',
-          apptData.startTime || '',
-          cancellationReason || apptData.cancellationReason || ''
+          apptData.start_time || '',
+          cancellationReason || apptData.cancellation_reason || ''
         );
       } catch (err) {
         console.error('Failed to trigger SMS cancellation notice:', err);
@@ -51,18 +51,16 @@ export async function POST(request: NextRequest) {
     }
 
     // Lock future SMS dispatches for this appointment
-    const updateData: Record<string, any> = { cancellationSmsSent: true };
-    if (cancellationReason && !apptData.cancellationReason) {
-      updateData.cancellationReason = cancellationReason.trim();
+    const updateData: Record<string, any> = { cancellation_sms_sent: true };
+    if (cancellationReason && !apptData.cancellation_reason) {
+      updateData.cancellation_reason = cancellationReason.trim();
     }
-    await updateDoc(apptRef, updateData);
+
+    await supabaseAdmin.from('appointments').update(updateData).eq('id', appointmentId);
 
     return NextResponse.json({ success: true });
   } catch (err: any) {
     console.error('Error cancelling appointment:', err);
-    return NextResponse.json(
-      { error: 'Internal server error', details: err.message },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Internal server error', details: err.message }, { status: 500 });
   }
 }

@@ -52,23 +52,25 @@ export default function PhoneInput({
 
   // Parse initial value (E.164 formatted string like "+14155552671")
   useEffect(() => {
-    if (!value) {
-      setLocalNumber('');
-      return;
-    }
-    
-    // Sort COUNTRIES by dialCode length descending to match longest dialCodes first (e.g. +971 before +9)
-    const sorted = [...COUNTRIES].sort((a, b) => b.dialCode.length - a.dialCode.length);
-    const matched = sorted.find(c => value.startsWith(c.dialCode));
-    
-    if (matched) {
-      setSelectedCountry(matched);
-      const digits = value.slice(matched.dialCode.length).replace(/\D/g, '');
-      setLocalNumber(digits);
-    } else {
-      // Fallback
-      setLocalNumber(value.replace(/\D/g, ''));
-    }
+    setTimeout(() => {
+      if (!value) {
+        setLocalNumber('');
+        return;
+      }
+      
+      // Sort COUNTRIES by dialCode length descending to match longest dialCodes first (e.g. +971 before +9)
+      const sorted = [...COUNTRIES].sort((a, b) => b.dialCode.length - a.dialCode.length);
+      const matched = sorted.find(c => value.startsWith(c.dialCode));
+      
+      if (matched) {
+        setSelectedCountry(matched);
+        const digits = value.slice(matched.dialCode.length).replace(/\D/g, '');
+        setLocalNumber(digits);
+      } else {
+        // Fallback
+        setLocalNumber(value.replace(/\D/g, ''));
+      }
+    }, 0);
   }, [value]);
 
   // Handle outside click to close dropdown

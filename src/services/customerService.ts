@@ -1,5 +1,4 @@
-import { db } from '../lib/firebase';
-import { doc, setDoc, collection, query, where, onSnapshot } from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 
 export interface CustomerRecord {
   id: string;
@@ -17,64 +16,60 @@ export interface CustomerRecord {
 }
 
 /**
- * Saves or updates a customer record in the Firestore 'customers' collection
+ * Saves or updates a customer record in the 'customers' table.
  */
 export async function saveCustomerRecord(
   patientName: string,
   queueId: string,
   status: 'Waiting' | 'Served' | 'Skipped' | 'Completed' | 'No-Show' | string,
-  extra: { 
-    patientId: string; 
-    phone: string; 
-    businessId: string; 
-    queueName: string; 
-    tokenNumber: number; 
+  extra: {
+    patientId: string;
+    phone: string;
+    businessId: string;
+    queueName: string;
+    tokenNumber: number;
   }
 ): Promise<void> {
   try {
-    const { getDoc } = await import('firebase/firestore');
-    const customerDocRef = doc(db, 'customers', extra.patientId);
-    
     const nowStr = new Date().toISOString();
     const todayDate = nowStr.split('T')[0];
 
     const dataToSave: Record<string, any> = {
       id: extra.patientId,
       name: patientName,
-      queueId,
-      queueName: extra.queueName,
+      queue_id: queueId,
+      queue_name: extra.queueName,
       status,
       phone: extra.phone,
-      businessId: extra.businessId,
-      tokenNumber: extra.tokenNumber,
-      date: todayDate
+      business_id: extra.businessId,
+      token_number: extra.tokenNumber,
+      visit_date: todayDate,
     };
 
     if (status === 'Waiting') {
-      dataToSave.joinedAt = nowStr;
+      dataToSave.joined_at = nowStr;
     } else {
-      dataToSave.completedAt = nowStr;
-      // Try to calculate waitTimeMin if doc already exists
-      try {
-        const existingSnap = await getDoc(customerDocRef);
-        if (existingSnap.exists() && existingSnap.data().joinedAt) {
-          const joinedTime = new Date(existingSnap.data().joinedAt).getTime();
-          const diffMin = Math.round((Date.now() - joinedTime) / 60000);
-          dataToSave.waitTimeMin = Math.max(0, diffMin);
-        }
-      } catch (e) {
-        // Ignore check
+      dataToSave.completed_at = nowStr;
+      // Try to calculate wait time from existing joined_at
+      const { data: existing } = await supabase
+        .from('customers')
+        .select('joined_at')
+        .eq('id', extra.patientId)
+        .maybeSingle();
+      if (existing?.joined_at) {
+        const diffMin = Math.round((Date.now() - new Date(existing.joined_at).getTime()) / 60000);
+        dataToSave.wait_time_min = Math.max(0, diffMin);
       }
     }
 
-    await setDoc(customerDocRef, dataToSave, { merge: true });
+    await supabase.from('customers').upsert(dataToSave, { onConflict: 'id' });
   } catch (err) {
     console.error('Error saving customer record:', err);
   }
 }
 
 /**
- * Subscribes to customer CRM records for a given business in real-time
+ * Subscribes to customer CRM records for a given business in real-time.
  */
 export function subscribeToCustomers(
   businessId: string,
@@ -85,38 +80,46 @@ export function subscribeToCustomers(
     return () => {};
   }
 
-  const q = query(
-    collection(db, 'customers'),
-    where('businessId', '==', businessId)
-  );
+  const fetchCustomers = async () => {
+    const { data, error } = await supabase
+      .from('customers')
+      .select('*')
+      .eq('business_id', businessId)
+      .order('joined_at', { ascending: false });
 
-  const unsubscribe = onSnapshot(
-    q,
-    (snapshot) => {
-      const customersList: CustomerRecord[] = [];
-      snapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        customersList.push({
-          id: docSnap.id,
-          name: data.name || '',
-          phone: data.phone || '',
-          queueId: data.queueId || '',
-          queueName: data.queueName || '',
-          tokenNumber: data.tokenNumber || 0,
-          status: data.status || 'Waiting',
-          joinedAt: data.joinedAt || new Date().toISOString(),
-          businessId: data.businessId || ''
-        });
-      });
-
-      // Sort by join timestamp (newest first)
-      customersList.sort((a, b) => new Date(b.joinedAt).getTime() - new Date(a.joinedAt).getTime());
-      callback(customersList);
-    },
-    (err) => {
-      console.error('Error listening to customers updates:', err);
+    if (error) {
+      console.error('Error fetching customers:', error);
+      return;
     }
-  );
 
-  return unsubscribe;
+    const customersList: CustomerRecord[] = (data ?? []).map((row) => ({
+      id: row.id,
+      name: row.name ?? '',
+      phone: row.phone ?? '',
+      queueId: row.queue_id ?? '',
+      queueName: row.queue_name ?? '',
+      tokenNumber: row.token_number ?? 0,
+      status: row.status ?? 'Waiting',
+      joinedAt: row.joined_at ?? new Date().toISOString(),
+      completedAt: row.completed_at ?? undefined,
+      waitTimeMin: row.wait_time_min ?? undefined,
+      businessId: row.business_id,
+      date: row.visit_date ?? undefined,
+    }));
+
+    callback(customersList);
+  };
+
+  fetchCustomers();
+
+  const channel = supabase
+    .channel(`customers:${businessId}`)
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'customers', filter: `business_id=eq.${businessId}` },
+      fetchCustomers
+    )
+    .subscribe();
+
+  return () => { supabase.removeChannel(channel); };
 }

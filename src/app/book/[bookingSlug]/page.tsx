@@ -2,8 +2,7 @@
 
 import { use, useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, doc, setDoc } from 'firebase/firestore';
+import { supabase } from '@/lib/supabase';
 import { 
   Calendar, 
   Clock, 
@@ -64,17 +63,25 @@ export default function CustomerBookingPage({ params }: PageProps) {
 
     async function fetchWorkspace() {
       try {
-        const q = query(
-          collection(db, 'businesses'),
-          where('bookingSlug', '==', bookingSlug)
-        );
-        const querySnap = await getDocs(q);
-        if (querySnap.empty) {
+        const { data, error } = await supabase
+          .from('businesses')
+          .select('*')
+          .eq('booking_slug', bookingSlug)
+          .maybeSingle();
+
+        if (error || !data) {
           setExists(false);
         } else {
-          const docSnap = querySnap.docs[0];
-          setWorkspaceId(docSnap.id);
-          setWorkspace(docSnap.data());
+          setWorkspaceId(data.id);
+          // Normalize snake_case → camelCase for template compatibility
+          setWorkspace({
+            ...data,
+            businessName: data.name,
+            primaryColor: data.primary_color,
+            appointmentsEnabled: data.appointments_enabled,
+            operatingHours: data.operating_hours,
+            services: data.services,
+          });
           setExists(true);
         }
       } catch (err) {
@@ -132,24 +139,20 @@ export default function CustomerBookingPage({ params }: PageProps) {
     setIsSubmitting(true);
 
     try {
-      const apptDocRef = doc(collection(db, 'appointments'));
       const duration = Number(selectedService.durationMinutes) || 30;
       const endTime = addMinutesToTime(selectedTime, duration);
 
-      await setDoc(apptDocRef, {
-        workspaceId,
-        customerId: `guest-${Math.random().toString(36).substring(2, 9)}`,
-        serviceId: selectedService.id,
-        queueId: selectedService.queueId || '',
-        queueName: selectedService.queueName || '',
+      const { error } = await supabase.from('appointments').insert({
+        workspace_id: workspaceId,
+        customer_id: `guest-${Math.random().toString(36).substring(2, 9)}`,
         date: selectedDate,
-        startTime: selectedTime,
-        endTime,
+        start_time: selectedTime,
+        end_time: endTime,
         status: 'scheduled',
-        customerName: fullName.trim(),
-        customerPhone: phoneNumber,
-        createdAt: new Date().toISOString()
+        customer_name: fullName.trim(),
+        customer_phone: phoneNumber,
       });
+      if (error) throw error;
 
       setStep('confirmed');
     } catch (err) {

@@ -25,6 +25,7 @@ import DashboardHeader from '@/components/DashboardHeader';
 import AddQueueModal from '@/components/AddQueueModal';
 import { createNewQueue, updateQueueSettings } from '@/services/queueService';
 import { useAuthStore } from '@/store/authStore';
+import { supabase } from '@/lib/supabase';
 
 export default function DashboardQueuesPage() {
   const router = useRouter();
@@ -42,8 +43,8 @@ export default function DashboardQueuesPage() {
       return;
     }
 
-    console.log(`STEP 1: Queues Page Mounted, requesting sync for ${user.uid}`);
-    const unsubscribe = initLiveSync(user.uid);
+    console.log(`STEP 1: Queues Page Mounted, requesting sync for ${user.id}`);
+    const unsubscribe = initLiveSync(user.id);
     return () => {
       if (unsubscribe) {
         unsubscribe();
@@ -81,7 +82,7 @@ export default function DashboardQueuesPage() {
   const businessDisplayName = authBusinessName || location.name;
 
   // Filter queues to only show queues for this location/business
-  const currentBusinessId = user?.uid || location.id;
+  const currentBusinessId = user?.id || location.id;
   const businessQueues = Object.values(queues).filter(q => q.locationId === currentBusinessId);
   
   // Fallback to all queues if new business has no queues yet
@@ -128,9 +129,7 @@ export default function DashboardQueuesPage() {
   const handleDeleteQueue = async (qId: string, qName: string) => {
     if (confirm(`Are you sure you want to delete the queue "${qName}"? This will clear all entries.`)) {
       try {
-        const { doc, deleteDoc } = await import('firebase/firestore');
-        const { db } = await import('@/lib/firebase');
-        await deleteDoc(doc(db, 'queues', qId));
+        await supabase.from('queues').delete().eq('id', qId);
         setToastMsg('Queue deleted successfully!');
         setTimeout(() => setToastMsg(null), 3000);
       } catch (err) {
@@ -411,7 +410,7 @@ export default function DashboardQueuesPage() {
         isOpen={showAddQueueModal}
         onClose={() => setShowAddQueueModal(false)}
         onSubmit={async (name, role) => {
-          await createNewQueue(user?.uid || '', name, role);
+          await createNewQueue(user?.id || '', name, role);
           setToastMsg('New queue created successfully!');
           setTimeout(() => setToastMsg(null), 3000);
         }}

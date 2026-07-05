@@ -1,6 +1,7 @@
 import { create } from 'zustand';
-import { Location, Queue, QueueEntry, StaffProfile, Announcement } from '../types';
+import { Location, Queue, StaffProfile, Announcement } from '../types';
 import { subscribeToQueues } from '../services/queueService';
+import { supabase } from '../lib/supabase';
 
 interface QueueState {
   locations: Record<string, Location>;
@@ -77,7 +78,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     if (val) {
       try {
         return JSON.parse(val);
-      } catch (e) {
+      } catch {
         return null;
       }
     }
@@ -89,7 +90,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     if (val) {
       try {
         return JSON.parse(val);
-      } catch (e) {
+      } catch {
         // Fallback to default
       }
     }
@@ -465,40 +466,32 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       currentUnsubscribe();
     }
 
-    // Asynchronously fetch business profile details from Firestore
+    // Asynchronously fetch business profile details from Supabase
     (async () => {
       try {
-        const { doc, getDoc } = await import('firebase/firestore');
-        const { db } = await import('../lib/firebase');
-        const docRef = doc(db, 'businesses', businessId);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          if (data && data.businessName) {
-            set((state) => {
-              const current = state.locations[businessId] || state.currentBusiness || {
-                id: businessId,
-                name: 'ABC Clinic',
-                type: 'Clinic',
-                address: '123, MG Road, Bangalore, Karnataka 560001',
-                timezone: '(GMT+05:30) Asia/Kolkata',
-                planType: 'premium',
-                subscriptionStatus: 'active',
-                billingCycleEnd: 'Jul 24, 2026',
-              };
-              const updated = {
-                ...current,
-                name: data.businessName,
-              };
-              return {
-                currentBusiness: state.currentBusiness?.id === businessId ? updated : state.currentBusiness,
-                locations: {
-                  ...state.locations,
-                  [businessId]: updated,
-                },
-              };
-            });
-          }
+        const { data } = await supabase
+          .from('businesses')
+          .select('name')
+          .eq('id', businessId)
+          .single();
+        if (data?.name) {
+          set((state) => {
+            const current = state.locations[businessId] || state.currentBusiness || {
+              id: businessId,
+              name: 'ABC Clinic',
+              type: 'Clinic',
+              address: '123, MG Road, Bangalore, Karnataka 560001',
+              timezone: '(GMT+05:30) Asia/Kolkata',
+              planType: 'premium',
+              subscriptionStatus: 'active',
+              billingCycleEnd: 'Jul 24, 2026',
+            };
+            const updated = { ...current, name: data.name };
+            return {
+              currentBusiness: state.currentBusiness?.id === businessId ? updated : state.currentBusiness,
+              locations: { ...state.locations, [businessId]: updated },
+            };
+          });
         }
       } catch (err) {
         console.error('Failed to fetch business profile in sync:', err);
@@ -576,7 +569,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
             };
           });
         }
-      } catch (e) {
+      } catch {
         // Ignore
       }
     }

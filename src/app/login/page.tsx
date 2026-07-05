@@ -79,15 +79,14 @@ export default function LoginPage() {
       router.push('/dashboard');
     } catch (err: any) {
       console.error('Auth Error:', err);
-      // Clean up Firebase error messages for display
       let displayMessage = err.message || 'An error occurred during authentication.';
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+      if (displayMessage.includes('Invalid login credentials') || displayMessage.includes('invalid_credentials') || err.status === 400) {
         displayMessage = 'Invalid email or password.';
-      } else if (err.code === 'auth/email-already-in-use') {
+      } else if (displayMessage.includes('User already registered') || displayMessage.includes('already registered')) {
         displayMessage = 'This email is already registered.';
-      } else if (err.code === 'auth/weak-password') {
+      } else if (displayMessage.includes('Password should be at least') || displayMessage.includes('weak_password')) {
         displayMessage = 'Password must be at least 6 characters.';
-      } else if (err.code === 'auth/invalid-email') {
+      } else if (displayMessage.includes('Invalid email') || displayMessage.includes('invalid_email')) {
         displayMessage = 'Please enter a valid email address.';
       }
       setError(displayMessage);

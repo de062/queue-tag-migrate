@@ -19,8 +19,7 @@ import {
   RefreshCw,
   AlertTriangle
 } from 'lucide-react';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { supabase } from '@/lib/supabase';
 import { 
   BarChart, 
   Bar, 
@@ -85,39 +84,41 @@ export default function AnalyticsPage() {
       return;
     }
 
-    console.log(`STEP 1: Analytics Page Mounted, requesting sync for ${user.uid}`);
-    const unsubscribeLiveSync = initLiveSync(user.uid);
+    console.log(`STEP 1: Analytics Page Mounted, requesting sync for ${user.id}`);
+    const unsubscribeLiveSync = initLiveSync(user.id);
 
     // Set up real-time listener for queueEvents today
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-    const startOfTodayStr = startOfToday.toISOString();
+    const startOfTodayStr = new Date();
+    startOfTodayStr.setHours(0, 0, 0, 0);
+    const startOfTodayIso = startOfTodayStr.toISOString();
 
-    const q = query(
-      collection(db, 'queueEvents'),
-      where('timestamp', '>=', startOfTodayStr)
-    );
+    const fetchEvents = async () => {
+      const { data, error } = await supabase
+        .from('queue_events')
+        .select('*')
+        .gte('timestamp', startOfTodayIso);
+      if (!error) {
+        setEvents(
+          (data ?? []).map((row) => ({
+            id: row.id,
+            queueId: row.queue_id ?? '',
+            action: row.action ?? '',
+            patientId: row.patient_id ?? '',
+            timestamp: row.timestamp ?? '',
+          }))
+        );
+      }
+    };
+    fetchEvents();
 
-    const unsubscribeEvents = onSnapshot(q, (snapshot) => {
-      const list: QueueEvent[] = [];
-      snapshot.forEach(docSnap => {
-        const data = docSnap.data();
-        list.push({
-          id: docSnap.id,
-          queueId: data.queueId || '',
-          action: data.action || '',
-          patientId: data.patientId || '',
-          timestamp: data.timestamp || ''
-        });
-      });
-      setEvents(list);
-    }, (err) => {
-      console.error('Error listening to queue events:', err);
-    });
+    const eventsChannel = supabase
+      .channel('analytics-events')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'queue_events' }, fetchEvents)
+      .subscribe();
 
     return () => {
       if (unsubscribeLiveSync) unsubscribeLiveSync();
-      unsubscribeEvents();
+      supabase.removeChannel(eventsChannel);
     };
   }, [initLiveSync, user, isAuthLoading, router]);
 
@@ -127,7 +128,7 @@ export default function AnalyticsPage() {
     type: 'Clinic',
   };
 
-  const currentBusinessId = user?.uid || location.id;
+  const currentBusinessId = user?.id || location.id;
   const activeQueuesList = Object.values(queues).filter(q => q.locationId === currentBusinessId);
   const queueIds = activeQueuesList.map(q => q.id);
 

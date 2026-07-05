@@ -1,38 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/firebase';
-import { collection, addDoc } from 'firebase/firestore';
+import { supabaseAdmin } from '@/lib/supabase-server';
 
 export async function POST(request: NextRequest) {
   try {
-    const { workspaceId, customerId, customerName, customerPhone, followUpDate, reason } = await request.json();
+    const { workspaceId, customerId, customerName, customerPhone, followUpDate, reason } =
+      await request.json();
 
-    // Validations
     if (!workspaceId || !customerName || !followUpDate || !reason) {
       return NextResponse.json(
         { error: 'Missing required fields: workspaceId, customerName, followUpDate, or reason' },
         { status: 400 }
       );
-      return;
     }
 
-    const followUpsRef = collection(db, 'followUps');
-    const docRef = await addDoc(followUpsRef, {
-      workspaceId,
-      customerId: customerId || '',
-      customerName: customerName.trim(),
-      customerPhone: customerPhone || '',
-      followUpDate,
+    const { data, error } = await supabaseAdmin.from('follow_ups').insert({
+      workspace_id: workspaceId,
+      customer_id: customerId || null,
+      customer_name: customerName.trim(),
+      customer_phone: customerPhone || null,
+      follow_up_date: followUpDate,
       reason: reason.trim(),
-      createdAt: new Date().toISOString(),
-      status: 'pending'
-    });
+      status: 'pending',
+    }).select('id').single();
 
-    return NextResponse.json({ success: true, id: docRef.id });
+    if (error) throw error;
+
+    return NextResponse.json({ success: true, id: data.id });
   } catch (err: any) {
     console.error('Error scheduling follow-up:', err);
-    return NextResponse.json(
-      { error: 'Internal server error', details: err.message },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Internal server error', details: err.message }, { status: 500 });
   }
 }

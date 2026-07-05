@@ -3,8 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { X, Copy, Download, Check, QrCode, Loader2 } from 'lucide-react';
 import { QRCodeCanvas } from 'qrcode.react';
-import { doc, onSnapshot } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { supabase } from '@/lib/supabase';
 import { toPng } from 'html-to-image';
 
 interface QRCodeModalProps {
@@ -26,30 +25,35 @@ export default function QRCodeModal({ isOpen, onClose, businessId, businessName 
   // Sync origin for QR link creation
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      setOrigin(window.location.origin);
+      setTimeout(() => setOrigin(window.location.origin), 0);
     }
   }, []);
 
-  // Sync business details (logo and name) from Firestore in real-time
+  // Sync business details (logo and name) from Supabase in real-time
   useEffect(() => {
     if (!isOpen || !businessId) return;
 
-    const bizRef = doc(db, 'businesses', businessId);
-    const unsubscribe = onSnapshot(bizRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        if (data.logoUrl) {
-          setLogoUrl(data.logoUrl);
-        }
-        if (data.businessName) {
-          setResolvedBusinessName(data.businessName);
-        }
+    const fetchBiz = async () => {
+      const { data } = await supabase
+        .from('businesses')
+        .select('name, logo_url')
+        .eq('id', businessId)
+        .single();
+      if (data) {
+        if (data.logo_url) setLogoUrl(data.logo_url);
+        if (data.name) setResolvedBusinessName(data.name);
       }
-    }, (err) => {
-      console.error('Error fetching business branding for QR poster:', err);
-    });
+    };
 
-    return () => unsubscribe();
+    fetchBiz();
+
+    const channel = supabase
+      .channel(`qr-biz:${businessId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'businesses',
+          filter: `id=eq.${businessId}` }, fetchBiz)
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [isOpen, businessId]);
 
   if (!isOpen) return null;
@@ -317,6 +321,7 @@ export default function QRCodeModal({ isOpen, onClose, businessId, businessName 
         {/* Top Section: Logo & Name */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', width: '100%' }}>
           {logoUrl ? (
+            /* eslint-disable-next-line @next/next/no-img-element */
             <img 
               src={logoUrl} 
               alt="Logo" 

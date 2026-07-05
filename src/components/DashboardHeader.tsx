@@ -4,8 +4,7 @@ import { useState, useEffect } from 'react';
 import { useQueueStore } from '@/store/queueStore';
 import { useAuthStore } from '@/store/authStore';
 import { Bell, ChevronDown } from 'lucide-react';
-import { doc, onSnapshot } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { supabase } from '@/lib/supabase';
 
 interface DashboardHeaderProps {
   subtext?: string;
@@ -21,31 +20,42 @@ export default function DashboardHeader({ subtext = 'Good morning,' }: Dashboard
   const locations = useQueueStore((state) => state.locations);
 
   useEffect(() => {
-    setIsMounted(true);
+    setTimeout(() => setIsMounted(true), 0);
     if (!user) {
       const loc = currentBusiness || locations['abc-clinic'];
       if (loc) {
-        setBusinessName(loc.name);
+        setTimeout(() => setBusinessName(loc.name), 0);
       }
       return;
     }
 
-    const bizRef = doc(db, 'businesses', user.uid);
-    const unsubscribe = onSnapshot(bizRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setBusinessName(data.businessName || user.displayName || 'ABC Clinic');
-        setLogoUrl(data.logoUrl || '');
-      }
-    }, (err) => {
-      console.error('Error listening to business details in header:', err);
-    });
+    const businessId = user.id;
 
-    return () => unsubscribe();
+    const fetchBiz = async () => {
+      const { data } = await supabase
+        .from('businesses')
+        .select('name, logo_url')
+        .eq('id', businessId)
+        .single();
+      if (data) {
+        setBusinessName(data.name || user.user_metadata?.full_name || 'ABC Clinic');
+        setLogoUrl(data.logo_url || '');
+      }
+    };
+
+    fetchBiz();
+
+    const channel = supabase
+      .channel(`header-biz:${businessId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'businesses',
+          filter: `id=eq.${businessId}` }, fetchBiz)
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [user, currentBusiness, locations]);
 
   const email = user?.email || 'abcclinic@gmail.com';
-  const name = user?.displayName || user?.email?.split('@')[0] || 'Admin';
+  const name = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Admin';
   const initial = name.charAt(0).toUpperCase();
 
   return (

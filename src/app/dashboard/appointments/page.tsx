@@ -5,8 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
 import Sidebar from '@/components/Sidebar';
 import DashboardHeader from '@/components/DashboardHeader';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { supabase } from '@/lib/supabase';
 import { Calendar, Filter, X, RefreshCw, CheckCircle, XCircle, Clock, CalendarOff } from 'lucide-react';
 import Link from 'next/link';
 
@@ -27,51 +26,65 @@ export default function AdminAppointmentsPage() {
   // Sync appointments and business services
   useEffect(() => {
     if (isAuthLoading) return;
+    if (!user) { router.push('/login'); return; }
 
-    if (!user) {
-      router.push('/login');
-      return;
-    }
+    const businessId = user.id;
 
-    // 1. Subscribe to appointments for this workspace
-    const apptsRef = collection(db, 'appointments');
-    const apptsQuery = query(apptsRef, where('workspaceId', '==', user.uid));
-
-    const unsubscribeAppts = onSnapshot(apptsQuery, (snapshot) => {
-      const fetched: any[] = [];
-      snapshot.forEach((docSnap) => {
-        fetched.push({
-          id: docSnap.id,
-          ...docSnap.data()
-        });
-      });
-      // Sort chronologically by date then startTime
-      fetched.sort((a, b) => {
-        const dateCompare = (a.date || '').localeCompare(b.date || '');
-        if (dateCompare !== 0) return dateCompare;
-        return (a.startTime || '').localeCompare(b.startTime || '');
-      });
-      setAppointments(fetched);
-      setIsLoading(false);
-    }, (err) => {
-      console.error('Error syncing appointments for admin:', err);
-      setIsLoading(false);
-    });
-
-    // 2. Subscribe to business profile to resolve service names
-    const bizRef = collection(db, 'businesses');
-    const unsubscribeBiz = onSnapshot(bizRef, (snapshot) => {
-      const bizDoc = snapshot.docs.find(doc => doc.id === user.uid);
-      if (bizDoc) {
-        const data = bizDoc.data();
-        setBusinessServices(data?.services || []);
-        setAppointmentsEnabled(data?.appointmentsEnabled ?? false);
+    const fetchAppointments = async () => {
+      const { data, error } = await supabase
+        .from('appointments')
+        .select('*')
+        .eq('workspace_id', businessId)
+        .order('date', { ascending: true })
+        .order('start_time', { ascending: true });
+      if (!error) {
+        setAppointments(
+          (data ?? []).map((row) => ({
+            id: row.id,
+            workspaceId: row.workspace_id,
+            customerName: row.customer_name,
+            customerPhone: row.customer_phone,
+            date: row.date,
+            startTime: typeof row.start_time === 'string' ? row.start_time.slice(0, 5) : row.start_time,
+            endTime: typeof row.end_time === 'string' ? row.end_time.slice(0, 5) : row.end_time,
+            status: row.status,
+            cancellationReason: row.cancellation_reason,
+          }))
+        );
       }
-    });
+      setIsLoading(false);
+    };
+
+    const fetchBiz = async () => {
+      const { data } = await supabase
+        .from('businesses')
+        .select('services, appointments_enabled')
+        .eq('id', businessId)
+        .single();
+      if (data) {
+        setBusinessServices(data.services || []);
+        setAppointmentsEnabled(data.appointments_enabled ?? false);
+      }
+    };
+
+    fetchAppointments();
+    fetchBiz();
+
+    const apptChannel = supabase
+      .channel(`admin-appointments:${businessId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'appointments',
+          filter: `workspace_id=eq.${businessId}` }, fetchAppointments)
+      .subscribe();
+
+    const bizChannel = supabase
+      .channel(`admin-biz:${businessId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'businesses',
+          filter: `id=eq.${businessId}` }, fetchBiz)
+      .subscribe();
 
     return () => {
-      unsubscribeAppts();
-      unsubscribeBiz();
+      supabase.removeChannel(apptChannel);
+      supabase.removeChannel(bizChannel);
     };
   }, [user, isAuthLoading, router]);
 

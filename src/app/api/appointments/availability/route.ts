@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/firebase';
-import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { supabaseAdmin } from '@/lib/supabase-server';
 
 const defaultOperatingHours = {
-  monday: { isOpen: true, openTime: '09:00', closeTime: '17:00', breaks: [] },
-  tuesday: { isOpen: true, openTime: '09:00', closeTime: '17:00', breaks: [] },
-  wednesday: { isOpen: true, openTime: '09:00', closeTime: '17:00', breaks: [] },
-  thursday: { isOpen: true, openTime: '09:00', closeTime: '17:00', breaks: [] },
-  friday: { isOpen: true, openTime: '09:00', closeTime: '17:00', breaks: [] },
-  saturday: { isOpen: false, openTime: '09:00', closeTime: '17:00', breaks: [] },
-  sunday: { isOpen: false, openTime: '09:00', closeTime: '17:00', breaks: [] }
+  monday:    { isOpen: true,  openTime: '09:00', closeTime: '17:00', breaks: [] },
+  tuesday:   { isOpen: true,  openTime: '09:00', closeTime: '17:00', breaks: [] },
+  wednesday: { isOpen: true,  openTime: '09:00', closeTime: '17:00', breaks: [] },
+  thursday:  { isOpen: true,  openTime: '09:00', closeTime: '17:00', breaks: [] },
+  friday:    { isOpen: true,  openTime: '09:00', closeTime: '17:00', breaks: [] },
+  saturday:  { isOpen: false, openTime: '09:00', closeTime: '17:00', breaks: [] },
+  sunday:    { isOpen: false, openTime: '09:00', closeTime: '17:00', breaks: [] },
 };
 
 const timeToMinutes = (t: string) => {
@@ -39,8 +38,11 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Input Validation & DoS Protection: Ensure IDs are well-formed and bounded
-    if (workspaceId.length > 100 || serviceId.length > 100 || !/^[a-zA-Z0-9_-]+$/.test(workspaceId) || !/^[a-zA-Z0-9_-]+$/.test(serviceId)) {
+    // Input Validation & DoS Protection
+    if (
+      workspaceId.length > 100 || serviceId.length > 100 ||
+      !/^[a-zA-Z0-9_-]+$/.test(workspaceId) || !/^[a-zA-Z0-9_-]+$/.test(serviceId)
+    ) {
       return NextResponse.json({ error: 'Invalid workspaceId or serviceId parameter format' }, { status: 400 });
     }
 
@@ -48,22 +50,22 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid date format. Use YYYY-MM-DD.' }, { status: 400 });
     }
 
-    // 1. Fetch the workspace document from Firestore
-    const bizDocRef = doc(db, 'businesses', workspaceId);
-    const bizDocSnap = await getDoc(bizDocRef);
-    if (!bizDocSnap.exists()) {
+    // 1. Fetch the workspace document
+    const { data: bizData, error: bizErr } = await supabaseAdmin
+      .from('businesses')
+      .select('*')
+      .eq('id', workspaceId)
+      .single();
+
+    if (bizErr || !bizData) {
       return NextResponse.json({ error: 'Workspace not found' }, { status: 404 });
     }
 
-    const bizData = bizDocSnap.data();
-
-    // If appointments are disabled, return an empty slots array
-    if (!bizData.appointmentsEnabled) {
+    if (!bizData.appointments_enabled) {
       return NextResponse.json({ slots: [] });
     }
 
-    // Find the matching service to get its durationMinutes
-    const services = bizData.services || [];
+    const services = bizData.services ?? [];
     const service = services.find((s: any) => s.id === serviceId);
     if (!service) {
       return NextResponse.json({ error: 'Service not found in the services menu' }, { status: 404 });
@@ -71,11 +73,11 @@ export async function GET(request: NextRequest) {
 
     const durationMinutes = Number(service.durationMinutes) || 30;
 
-    // Parse date safely to find the weekday (avoiding timezone shifting)
+    // Parse date safely
     const dateParts = date.split('-');
-    const year = parseInt(dateParts[0], 10);
+    const year  = parseInt(dateParts[0], 10);
     const month = parseInt(dateParts[1], 10) - 1;
-    const day = parseInt(dateParts[2], 10);
+    const day   = parseInt(dateParts[2], 10);
 
     if (isNaN(year) || isNaN(month) || isNaN(day)) {
       return NextResponse.json({ error: 'Invalid date format. Use YYYY-MM-DD.' }, { status: 400 });
@@ -86,7 +88,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid date format. Use YYYY-MM-DD.' }, { status: 400 });
     }
 
-    // Ensure date is within -30 days to +365 days to prevent DoS via extreme date loops
+    // Ensure date is within -30 to +365 days
     const now = new Date();
     const diffDays = (parsedDate.getTime() - now.getTime()) / (1000 * 3600 * 24);
     if (diffDays < -30 || diffDays > 365) {
@@ -94,78 +96,65 @@ export async function GET(request: NextRequest) {
     }
 
     const dayOfWeek = parsedDate.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
-
-    // Find the operatingHours for the specific day of the week requested
-    const operatingHours = bizData.operatingHours || defaultOperatingHours;
+    const operatingHours = bizData.operating_hours ?? defaultOperatingHours;
     const dayConfig = operatingHours[dayOfWeek];
 
     if (!dayConfig || !dayConfig.isOpen) {
       return NextResponse.json({ slots: [] });
     }
 
-    const openTime = dayConfig.openTime || '09:00';
+    const openTime  = dayConfig.openTime  || '09:00';
     const closeTime = dayConfig.closeTime || '17:00';
-    const breaks = dayConfig.breaks || [];
+    const breaks    = dayConfig.breaks    || [];
 
-    // 2. Fetch conflicting scheduled appointments from the database
-    const apptsQuery = query(
-      collection(db, 'appointments'),
-      where('workspaceId', '==', workspaceId),
-      where('date', '==', date),
-      where('status', '==', 'scheduled')
-    );
-    const apptsSnap = await getDocs(apptsQuery);
-    const existingAppts: any[] = [];
-    apptsSnap.forEach((docSnap) => {
-      existingAppts.push(docSnap.data());
-    });
+    // 2. Fetch conflicting scheduled appointments
+    const { data: existingAppts } = await supabaseAdmin
+      .from('appointments')
+      .select('start_time, end_time')
+      .eq('workspace_id', workspaceId)
+      .eq('date', date)
+      .eq('status', 'scheduled');
 
-    // 3. Generate all slots of length durationMinutes between openTime and closeTime
-    const openMin = timeToMinutes(openTime);
+    // 3. Generate all slots
+    const openMin  = timeToMinutes(openTime);
     const closeMin = timeToMinutes(closeTime);
-
     const allSlots: any[] = [];
     for (let current = openMin; current + durationMinutes <= closeMin; current += durationMinutes) {
       allSlots.push({
         start: current,
         end: current + durationMinutes,
         startTimeString: minutesToTime(current),
-        endTimeString: minutesToTime(current + durationMinutes)
+        endTimeString: minutesToTime(current + durationMinutes),
       });
     }
 
-    // 4. Filter out slots that overlap with breaks or existing appointments
+    // 4. Filter out overlapping slots
     const availableSlots = allSlots.filter((slot) => {
-      // Check break overlaps
       const hasBreakOverlap = breaks.some((b: any) => {
         if (!b.start || !b.end) return false;
-        const breakStart = timeToMinutes(b.start);
-        const breakEnd = timeToMinutes(b.end);
-        return slot.start < breakEnd && slot.end > breakStart;
+        const bStart = timeToMinutes(b.start);
+        const bEnd   = timeToMinutes(b.end);
+        return slot.start < bEnd && slot.end > bStart;
       });
       if (hasBreakOverlap) return false;
 
-      // Check scheduled appointment overlaps
-      const hasAppointmentOverlap = existingAppts.some((appt: any) => {
-        if (!appt.startTime || !appt.endTime) return false;
-        const apptStart = timeToMinutes(appt.startTime);
-        const apptEnd = timeToMinutes(appt.endTime);
-        return slot.start < apptEnd && slot.end > apptStart;
+      const hasApptOverlap = (existingAppts ?? []).some((appt: any) => {
+        if (!appt.start_time || !appt.end_time) return false;
+        const aStart = timeToMinutes(
+          typeof appt.start_time === 'string' ? appt.start_time.slice(0, 5) : appt.start_time
+        );
+        const aEnd = timeToMinutes(
+          typeof appt.end_time === 'string' ? appt.end_time.slice(0, 5) : appt.end_time
+        );
+        return slot.start < aEnd && slot.end > aStart;
       });
-      if (hasAppointmentOverlap) return false;
-
-      return true;
+      return !hasApptOverlap;
     });
 
-    // Return the final array of clean, starting times with caching headers
     const result = availableSlots.map((s) => s.startTimeString);
     return NextResponse.json(
       { slots: result },
-      {
-        headers: {
-          'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=30'
-        }
-      }
+      { headers: { 'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=30' } }
     );
   } catch (err: any) {
     console.error('Error calculating availability:', err);

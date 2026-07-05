@@ -1,9 +1,7 @@
-import { db, auth } from '../lib/firebase';
-import { doc, setDoc } from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 
 /**
- * Updates the white-label branding settings for the current business owner's enterprise workspace.
- * Saves to the business document in the 'businesses' collection.
+ * Updates the white-label branding settings for the current business owner's workspace.
  */
 export async function updateEnterpriseSettings(
   businessName: string,
@@ -18,41 +16,25 @@ export async function updateEnterpriseSettings(
   publicEmail?: string
 ): Promise<void> {
   try {
-    const user = auth.currentUser;
-    if (!user) {
-      throw new Error('Authentication required: No active user session found to update settings.');
-    }
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('Authentication required: No active user session found.');
 
-    const businessDocRef = doc(db, 'businesses', user.uid);
     const updateData: Record<string, any> = {
-      businessName,
-      logoUrl,
-      primaryColor,
+      name: businessName,
+      logo_url: logoUrl,
+      primary_color: primaryColor,
     };
 
-    if (address !== undefined) {
-      updateData.address = address;
-    }
-    if (email !== undefined) {
-      updateData.email = email;
-    }
-    if (businessCategory !== undefined) {
-      updateData.businessCategory = businessCategory;
-    }
-    if (requirePhoneNumber !== undefined) {
-      updateData.requirePhoneNumber = requirePhoneNumber;
-    }
-    if (enableSmsAlerts !== undefined) {
-      updateData.enableSmsAlerts = enableSmsAlerts;
-    }
-    if (publicPhone !== undefined) {
-      updateData.publicPhone = publicPhone;
-    }
-    if (publicEmail !== undefined) {
-      updateData.publicEmail = publicEmail;
-    }
+    if (address !== undefined)           updateData.address = address;
+    if (email !== undefined)             updateData.email = email;
+    if (businessCategory !== undefined)  updateData.business_category = businessCategory;
+    if (requirePhoneNumber !== undefined) updateData.require_phone_number = requirePhoneNumber;
+    if (enableSmsAlerts !== undefined)   updateData.enable_sms_alerts = enableSmsAlerts;
+    if (publicPhone !== undefined)       updateData.public_phone = publicPhone;
+    if (publicEmail !== undefined)       updateData.public_email = publicEmail;
 
-    await setDoc(businessDocRef, updateData, { merge: true });
+    const { error } = await supabase.from('businesses').update(updateData).eq('id', user.id);
+    if (error) throw error;
   } catch (err) {
     console.error('Error updating enterprise settings:', err);
     throw err;
@@ -60,66 +42,29 @@ export async function updateEnterpriseSettings(
 }
 
 /**
- * Destructively deletes the current business/enterprise document and all associated sub-collections 
- * (queues, active tokens, staff profiles, staff invites, and customer logs).
- * Afterwards, signs the user out of Firebase Auth.
+ * Deletes the current business/workspace.
+ * FK cascades handle deletion of queues, staff, invites, customers, appointments, follow-ups.
+ * Signs the user out afterwards.
  */
 export async function deleteWorkspace(): Promise<void> {
   try {
-    const user = auth.currentUser;
-    if (!user) {
-      throw new Error('Authentication required: No active user session found to delete workspace.');
-    }
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('Authentication required: No active user session found.');
 
-    const businessId = user.uid;
-    const { collection, query, where, getDocs, deleteDoc } = await import('firebase/firestore');
-    const { signOut } = await import('firebase/auth');
+    // Single delete — FK on delete cascade cleans up all child rows
+    const { error } = await supabase.from('businesses').delete().eq('id', user.id);
+    if (error) throw error;
 
-    // 1. Delete business metadata document
-    const businessDocRef = doc(db, 'businesses', businessId);
-    await deleteDoc(businessDocRef);
-
-    const deletePromises: Promise<any>[] = [];
-
-    // 2. Wipe all queues (including nested entries)
-    const queuesQuery = query(collection(db, 'queues'), where('businessId', '==', businessId));
-    const queuesSnapshot = await getDocs(queuesQuery);
-    queuesSnapshot.forEach((docSnap) => {
-      deletePromises.push(deleteDoc(docSnap.ref));
-    });
-
-    // 3. Wipe all registered staff profiles
-    const staffQuery = query(collection(db, 'staff'), where('businessId', '==', businessId));
-    const staffSnapshot = await getDocs(staffQuery);
-    staffSnapshot.forEach((docSnap) => {
-      deletePromises.push(deleteDoc(docSnap.ref));
-    });
-
-    // 4. Wipe all pending staff invites
-    const invitesQuery = query(collection(db, 'staffInvites'), where('businessId', '==', businessId));
-    const invitesSnapshot = await getDocs(invitesQuery);
-    invitesSnapshot.forEach((docSnap) => {
-      deletePromises.push(deleteDoc(docSnap.ref));
-    });
-
-    // 5. Wipe all historical customer documents
-    const customersQuery = query(collection(db, 'customers'), where('businessId', '==', businessId));
-    const customersSnapshot = await getDocs(customersQuery);
-    customersSnapshot.forEach((docSnap) => {
-      deletePromises.push(deleteDoc(docSnap.ref));
-    });
-
-    // Execute all deletions in parallel
-    await Promise.all(deletePromises);
-
-    // 6. Sign out the user
-    await signOut(auth);
+    await supabase.auth.signOut();
   } catch (err) {
     console.error('Error in deleteWorkspace settingsService:', err);
     throw err;
   }
 }
 
+/**
+ * Updates appointments module settings on the businesses row.
+ */
 export async function updateAppointmentSettings(
   appointmentsEnabled: boolean,
   bookingSlug: string,
@@ -127,18 +72,17 @@ export async function updateAppointmentSettings(
   services: any[]
 ): Promise<void> {
   try {
-    const user = auth.currentUser;
-    if (!user) {
-      throw new Error('Authentication required: No active user session found to update settings.');
-    }
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('Authentication required: No active user session found.');
 
-    const businessDocRef = doc(db, 'businesses', user.uid);
-    await setDoc(businessDocRef, {
-      appointmentsEnabled,
-      bookingSlug,
-      operatingHours,
-      services
-    }, { merge: true });
+    const { error } = await supabase.from('businesses').update({
+      appointments_enabled: appointmentsEnabled,
+      booking_slug: bookingSlug,
+      operating_hours: operatingHours,
+      services,
+    }).eq('id', user.id);
+
+    if (error) throw error;
   } catch (err) {
     console.error('Error updating appointment settings:', err);
     throw err;
